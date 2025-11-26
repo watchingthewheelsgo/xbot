@@ -1,0 +1,8 @@
+{
+  "pythonVersion": "3.13",
+  "typeCheckingMode": "basic",
+  "include": ["server", "main.py", "util.py"],
+  "exclude": ["**/__pycache__", "**/.git"],
+  "venvPath": ".",
+  "venv": ".venv"
+}
