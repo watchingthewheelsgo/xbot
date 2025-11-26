@@ -1,22 +1,19 @@
 from abc import ABC
-from pydantic import BaseModel
+
+from pydantic import BaseModel, ConfigDict
 
 
 class BaseAgent(BaseModel, ABC):
-    def __init__(self):
-        pass
+    model_config = ConfigDict(extra="allow")
 
 
 class ReActAgent(BaseAgent):
-    def __init__(self):
-        pass
+    pass
 
 
 class ToolCallAgent(ReActAgent):
-    def __init__(self):
-        pass
+    pass
 
 
 class Agent(ToolCallAgent):
-    def __init__(self):
-        pass
+    pass

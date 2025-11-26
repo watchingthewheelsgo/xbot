@@ -1,11 +1,25 @@
-{ 
+{
     "rss": [
         {
-            "name": "",
-            "description": "",
-            "category": "",
-            "url": "",
-            "source": ""
+            "name": "Hacker News",
+            "description": "Tech news and discussions",
+            "category": "technology",
+            "url": "https://news.ycombinator.com/rss",
+            "source": "hackernews"
+        },
+        {
+            "name": "TechCrunch",
+            "description": "The latest technology news and information on startups",
+            "category": "technology",
+            "url": "https://techcrunch.com/feed/",
+            "source": "techcrunch"
+        },
+        {
+            "name": "BBC News",
+            "description": "Latest news from BBC",
+            "category": "news",
+            "url": "http://feeds.bbci.co.uk/news/rss.xml",
+            "source": "bbc"
         }
     ]
 }
