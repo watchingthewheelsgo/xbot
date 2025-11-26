@@ -5,8 +5,20 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+    "apscheduler>=3.10.4",
+    "aiosqlite>=0.20.0",
+    "beautifulsoup4>=4.12.3",
     "dotenv>=0.9.9",
+    "feedparser>=6.0.11",
+    "httpx>=0.28.1",
     "loguru>=0.7.3",
     "pydantic>=2.12.4",
+    "pyright>=1.1.407",
+    "python-dateutil>=2.9.0",
     "python-telegram-bot>=22.5",
+    "sqlalchemy[asyncio]>=2.0.36",
+    "tiktoken>=0.12.0",
+    "openai>=2.8.1",
+    "tenacity>=9.1.2",
+    "fastapi>=0.122.0",
 ]
