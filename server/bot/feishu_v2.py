@@ -95,6 +95,7 @@ class FeishuBotV2:
         self._own_loop: asyncio.AbstractEventLoop | None = None
         self._ws_thread: Optional[threading.Thread] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._processed_message_ids: set[str] = set()  # Dedup reconnect replays
 
         # Create Lark client for sending messages
         self.client = (
@@ -197,6 +198,20 @@ class FeishuBotV2:
             if not data.event or not data.event.message:
                 return
             message = data.event.message
+
+            # Dedup: skip messages already processed (replayed after reconnect)
+            msg_id = message.message_id
+            if msg_id and msg_id in self._processed_message_ids:
+                logger.debug(f"Skipping duplicate message: {msg_id}")
+                return
+            if msg_id:
+                self._processed_message_ids.add(msg_id)
+                # Limit cache size
+                if len(self._processed_message_ids) > 5000:
+                    self._processed_message_ids = set(
+                        list(self._processed_message_ids)[-2500:]
+                    )
+
             chat_id = message.chat_id
             msg_type = message.message_type
 
