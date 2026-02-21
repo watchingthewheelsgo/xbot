@@ -369,6 +369,7 @@ class NewsAnalyzer:
 
             # Parse JSON response
             import json
+            import re
 
             # Clean response - extract JSON array
             response = response.strip()
@@ -376,6 +377,9 @@ class NewsAnalyzer:
                 response = response.split("```")[1]
                 if response.startswith("json"):
                     response = response[4:]
+
+            # Strip trailing commas before } or ] (common LLM mistake)
+            response = re.sub(r",\s*([}\]])", r"\1", response)
 
             analyses = json.loads(response)
 

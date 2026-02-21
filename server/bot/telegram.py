@@ -99,8 +99,12 @@ class TelegramBot:
                 chat_id=target, text=text, parse_mode=parse_mode
             )
         except Exception as e:
-            logger.error(f"Failed to send message: {e}")
-            raise
+            if parse_mode and "can't parse entities" in str(e).lower():
+                logger.warning(f"Markdown parse failed, retrying as plain text: {e}")
+                await self._bot.send_message(chat_id=target, text=text)
+            else:
+                logger.error(f"Failed to send message: {e}")
+                raise
 
     async def send_markdown(
         self, text: str, chat_id: Optional[str] = None, escape: bool = False
