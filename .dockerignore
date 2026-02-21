@@ -1,0 +1,12 @@
+__pycache__
+*.py[cod]
+.venv
+.env
+.git
+.gitignore
+*.db
+*.log
+*.pid
+.pre-commit-config.yaml
+pyrightconfig.json
+.claude
