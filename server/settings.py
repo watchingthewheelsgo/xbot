@@ -2,21 +2,11 @@
 Application settings with support for new data sources and services.
 """
 
-import json
-
 from dotenv import load_dotenv
-from pydantic import BaseModel, Field
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 load_dotenv()
-
-
-class FeishuBotConfig(BaseModel):
-    """Configuration for a single Feishu bot instance."""
-
-    app_id: str
-    app_secret: str
-    admin_chat_id: str = ""
 
 
 class Settings(BaseSettings):
@@ -45,8 +35,17 @@ class Settings(BaseSettings):
     feishu_encrypt_key: str = Field(default="", alias="FEISHU_ENCRYPT_KEY")
     feishu_admin_chat_id: str = Field(default="", alias="FEISHU_ADMIN_CHAT_ID")
 
-    # Multi-bot support: JSON array of bot configs
-    feishu_bots_json: str = Field(default="", alias="FEISHU_BOTS")
+    def is_feishu_configured(self) -> bool:
+        """Check if Feishu bot is properly configured."""
+        return bool(self.feishu_app_id) and bool(self.feishu_app_secret)
+
+    def get_feishu_admin_chat_ids(self) -> list[str]:
+        """Get all Feishu admin chat IDs (comma-separated)."""
+        if not self.feishu_admin_chat_id:
+            return []
+        return [
+            cid.strip() for cid in self.feishu_admin_chat_id.split(",") if cid.strip()
+        ]
 
     # ═══════════════════════════════════════════════════════════════════════════
     # RSS Configuration
@@ -219,33 +218,6 @@ class Settings(BaseSettings):
     def is_llm_configured(self) -> bool:
         """Check if LLM (OpenAI) is properly configured."""
         return bool(self.openai_api_key)
-
-    def is_feishu_configured(self) -> bool:
-        """Check if at least one Feishu bot is properly configured."""
-        return len(self.get_feishu_configs()) > 0
-
-    def get_feishu_configs(self) -> list[FeishuBotConfig]:
-        """Get all Feishu bot configurations.
-
-        Priority: FEISHU_BOTS JSON array > single FEISHU_APP_ID/SECRET fields.
-        """
-        if self.feishu_bots_json:
-            try:
-                raw = json.loads(self.feishu_bots_json)
-                return [FeishuBotConfig(**item) for item in raw]
-            except (json.JSONDecodeError, TypeError, ValueError):
-                pass
-
-        # Fallback to single bot config
-        if self.feishu_app_id and self.feishu_app_secret:
-            return [
-                FeishuBotConfig(
-                    app_id=self.feishu_app_id,
-                    app_secret=self.feishu_app_secret,
-                    admin_chat_id=self.feishu_admin_chat_id,
-                )
-            ]
-        return []
 
 
 global_settings = Settings()

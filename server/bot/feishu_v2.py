@@ -16,11 +16,6 @@ from loguru import logger
 
 from server.settings import global_settings
 
-# Lock to serialize WebSocket startup across multiple bot instances.
-# The lark SDK uses a shared module-level `loop` variable; this lock
-# ensures each bot captures it before the next one overwrites it.
-_ws_startup_lock = threading.Lock()
-
 
 def markdown_to_feishu_post(text: str, title: str = "") -> dict:
     """Convert Telegram Markdown text to Feishu post (rich text) JSON.
@@ -89,10 +84,12 @@ def _parse_markdown_line(line: str) -> list[dict]:
 class FeishuBotV2:
     """Feishu bot using official SDK with WebSocket long connection (no public URL needed)."""
 
-    def __init__(self, app_id: str, app_secret: str, admin_chat_id: str = ""):
+    def __init__(
+        self, app_id: str, app_secret: str, admin_chat_ids: list[str] | None = None
+    ):
         self.app_id = app_id
         self.app_secret = app_secret
-        self.admin_chat_id = admin_chat_id
+        self.admin_chat_ids = admin_chat_ids or []
         self._command_handlers: dict[str, Callable] = {}
         self._ws_client = None
         self._own_loop: asyncio.AbstractEventLoop | None = None
@@ -184,14 +181,15 @@ class FeishuBotV2:
             self.send_text(chat_id, text)
 
     async def send_to_admin(self, text: str, parse_mode: Optional[str] = None) -> None:
-        """Send a push notification to the admin chat (async, for scheduler use)."""
-        if not self.admin_chat_id:
+        """Send a push notification to all admin chats (async, for scheduler use)."""
+        if not self.admin_chat_ids:
             logger.warning(
                 "No feishu_admin_chat_id configured, cannot send admin message"
             )
             return
         loop = asyncio.get_event_loop()
-        await loop.run_in_executor(None, self.send_post, self.admin_chat_id, text, "")
+        for chat_id in self.admin_chat_ids:
+            await loop.run_in_executor(None, self.send_post, chat_id, text, "")
 
     def _handle_message(self, data: P2ImMessageReceiveV1) -> None:
         """Handle incoming message event (synchronous callback from SDK)."""
@@ -277,53 +275,29 @@ class FeishuBotV2:
             log_level=lark.LogLevel.INFO,
         )
 
-        ready = threading.Event()
-
         def _run_ws():
             # The lark SDK uses a module-level `loop` variable grabbed at import time,
             # which is the main thread's event loop. We must replace it with a fresh
             # loop owned by this thread, otherwise run_until_complete() fails with
             # "This event loop is already running".
-            #
-            # When multiple bots start concurrently, they race on this shared variable.
-            # We use a lock to serialize: set ws_mod.loop → enter start() → release
-            # lock after a delay to let the connection establish.
             import lark_oapi.ws.client as ws_mod
 
             new_loop = asyncio.new_event_loop()
             asyncio.set_event_loop(new_loop)
-            self._own_loop = new_loop
-
-            _ws_startup_lock.acquire()
             ws_mod.loop = new_loop
-
-            # Release lock after 1 second to let connection establish
-            def release_after_delay():
-                import time
-
-                time.sleep(1)
-                if _ws_startup_lock.locked():
-                    _ws_startup_lock.release()
-                ready.set()
-
-            threading.Thread(target=release_after_delay, daemon=True).start()
-
+            self._own_loop = new_loop
             if self._ws_client:
                 try:
                     self._ws_client.start()
                 except Exception as e:
-                    if _ws_startup_lock.locked():
-                        _ws_startup_lock.release()
-                    ready.set()
                     logger.error(f"Feishu WebSocket error: {e}")
 
         self._ws_thread = threading.Thread(
             target=_run_ws,
-            name=f"feishu-ws-{self.app_id[-4:]}",
+            name="feishu-ws",
             daemon=True,
         )
         self._ws_thread.start()
-        ready.wait(timeout=10)
         logger.info("Feishu WebSocket started in background thread")
 
     def stop(self) -> None:
@@ -349,6 +323,6 @@ def get_feishu_bot_v2() -> Optional[FeishuBotV2]:
         feishu_bot_v2 = FeishuBotV2(
             app_id=global_settings.feishu_app_id,
             app_secret=global_settings.feishu_app_secret,
-            admin_chat_id=global_settings.feishu_admin_chat_id,
+            admin_chat_ids=global_settings.get_feishu_admin_chat_ids(),
         )
     return feishu_bot_v2
