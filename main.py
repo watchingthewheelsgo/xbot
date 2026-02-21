@@ -106,32 +106,32 @@ async def main() -> None:
         logger.info("Telegram bot initialized with commands")
 
     # 初始化 Feishu Bot (在同进程的后台线程中运行)
-    feishu_bot = None
-    if settings.is_feishu_configured():
+    feishu_bots: list = []
+    feishu_configs = settings.get_feishu_configs()
+    if feishu_configs:
         from server.bot.feishu_v2 import FeishuBotV2
         from server.bot.feishu_dispatcher import (
             FeishuCommandDispatcher,
             register_feishu_commands,
         )
 
-        feishu_bot = FeishuBotV2(
-            app_id=settings.feishu_app_id,
-            app_secret=settings.feishu_app_secret,
-            admin_chat_id=settings.feishu_admin_chat_id,
-        )
+        for cfg in feishu_configs:
+            bot = FeishuBotV2(
+                app_id=cfg.app_id,
+                app_secret=cfg.app_secret,
+                admin_chat_id=cfg.admin_chat_id,
+            )
+            bot.set_event_loop(asyncio.get_event_loop())
 
-        # 存储主事件循环引用，供跨线程异步调用
-        feishu_bot.set_event_loop(asyncio.get_event_loop())
-
-        # 创建飞书命令分发器并注册命令
-        feishu_dispatcher = FeishuCommandDispatcher(
-            scheduler=scheduler,
-            correlation_engine=correlation_engine,
-            report_generator=report_generator,
-            rss_fetcher=rss_fetcher,
-        )
-        register_feishu_commands(feishu_bot, feishu_dispatcher)
-        logger.info("Feishu bot initialized with commands")
+            feishu_dispatcher = FeishuCommandDispatcher(
+                scheduler=scheduler,
+                correlation_engine=correlation_engine,
+                report_generator=report_generator,
+                rss_fetcher=rss_fetcher,
+            )
+            register_feishu_commands(bot, feishu_dispatcher)
+            feishu_bots.append(bot)
+            logger.info(f"Feishu bot initialized: {cfg.app_id}")
 
     try:
         # 初始化数据库
@@ -145,19 +145,19 @@ async def main() -> None:
         await load_watchlist(get_session_factory())
 
         # 设置推送依赖（需要在数据库初始化之后）
-        if telegram_bot or feishu_bot:
+        if telegram_bot or feishu_bots:
             scheduler.set_push_dependencies(
                 telegram_bot=telegram_bot,
-                feishu_bot=feishu_bot,
+                feishu_bots=feishu_bots,
                 correlation_engine=correlation_engine,
                 report_generator=report_generator,
                 db_session_factory=get_session_factory(),
             )
 
         # 启动 Feishu Bot WebSocket (后台线程)
-        if feishu_bot:
-            feishu_bot.start_in_thread()
-            logger.info("Feishu bot WebSocket started in background thread")
+        for bot in feishu_bots:
+            bot.start_in_thread()
+            logger.info(f"Feishu bot WebSocket started: {bot.app_id}")
 
         # 启动 Telegram Bot 轮询
         if telegram_bot:
@@ -204,9 +204,9 @@ async def main() -> None:
             logger.info("Stopping Telegram bot...")
             await telegram_bot.stop()
 
-        if feishu_bot:
-            logger.info("Stopping Feishu bot...")
-            feishu_bot.stop()
+        for bot in feishu_bots:
+            logger.info(f"Stopping Feishu bot {bot.app_id}...")
+            bot.stop()
 
         logger.info("Closing service client...")
         await service_client.close()

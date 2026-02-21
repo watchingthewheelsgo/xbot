@@ -37,7 +37,7 @@ class DataScheduler:
 
         # Push notification dependencies
         self._telegram_bot: Optional["TelegramBot"] = None
-        self._feishu_bot: Optional["FeishuBotV2"] = None
+        self._feishu_bots: list["FeishuBotV2"] = []
         self._correlation_engine: Optional["CorrelationEngine"] = None
         self._report_generator: Optional["ReportGenerator"] = None
         self._db_session_factory: Any = None
@@ -80,14 +80,14 @@ class DataScheduler:
     def set_push_dependencies(
         self,
         telegram_bot: Optional["TelegramBot"] = None,
-        feishu_bot: Optional["FeishuBotV2"] = None,
+        feishu_bots: list["FeishuBotV2"] | None = None,
         correlation_engine: Optional["CorrelationEngine"] = None,
         report_generator: Optional["ReportGenerator"] = None,
         db_session_factory: Any = None,
     ) -> None:
         """Inject push notification dependencies."""
         self._telegram_bot = telegram_bot
-        self._feishu_bot = feishu_bot
+        self._feishu_bots = feishu_bots or []
         self._correlation_engine = correlation_engine
         self._report_generator = report_generator
         self._db_session_factory = db_session_factory
@@ -102,7 +102,7 @@ class DataScheduler:
     @property
     def _has_push_bot(self) -> bool:
         """Check if any push bot is configured."""
-        return self._telegram_bot is not None or self._feishu_bot is not None
+        return self._telegram_bot is not None or len(self._feishu_bots) > 0
 
     async def _push_message(self, message: str) -> None:
         """Send a push notification to all configured bots."""
@@ -111,11 +111,11 @@ class DataScheduler:
                 await self._telegram_bot.send_to_admin(message)
             except Exception as e:
                 logger.error(f"Telegram push failed: {e}")
-        if self._feishu_bot:
+        for bot in self._feishu_bots:
             try:
-                await self._feishu_bot.send_to_admin(message)
+                await bot.send_to_admin(message)
             except Exception as e:
-                logger.error(f"Feishu push failed: {e}")
+                logger.error(f"Feishu push failed ({bot.app_id}): {e}")
 
     # ── Data fetch job handlers ───────────────────────────────────────────────
 
@@ -812,7 +812,7 @@ class DataScheduler:
             },
             "push": {
                 "telegram": self._telegram_bot is not None,
-                "feishu": self._feishu_bot is not None,
+                "feishu": len(self._feishu_bots),
                 "news_aggregator": self._news_aggregator is not None,
                 "news_analyzer": self._news_analyzer is not None,
             },
