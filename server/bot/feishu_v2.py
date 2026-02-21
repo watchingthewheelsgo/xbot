@@ -287,7 +287,7 @@ class FeishuBotV2:
             #
             # When multiple bots start concurrently, they race on this shared variable.
             # We use a lock to serialize: set ws_mod.loop → enter start() → release
-            # lock via call_soon once the loop is running.
+            # lock after a delay to let the connection establish.
             import lark_oapi.ws.client as ws_mod
 
             new_loop = asyncio.new_event_loop()
@@ -296,8 +296,17 @@ class FeishuBotV2:
 
             _ws_startup_lock.acquire()
             ws_mod.loop = new_loop
-            new_loop.call_soon(lambda: _ws_startup_lock.release())
-            new_loop.call_soon(lambda: ready.set())
+
+            # Release lock after 1 second to let connection establish
+            def release_after_delay():
+                import time
+
+                time.sleep(1)
+                if _ws_startup_lock.locked():
+                    _ws_startup_lock.release()
+                ready.set()
+
+            threading.Thread(target=release_after_delay, daemon=True).start()
 
             if self._ws_client:
                 try:
