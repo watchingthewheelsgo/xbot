@@ -252,14 +252,14 @@ class FeishuBotV2:
         )
 
         try:
-            response = future.result(timeout=30)
+            response = future.result(timeout=120)
             if response:
                 self.send_post(chat_id, response)
         except TimeoutError:
-            logger.error("Async handler timed out")
+            logger.error(f"Async handler timed out: {handler.__name__}")
             self.send_text(chat_id, "❌ 请求超时，请稍后再试")
         except Exception as e:
-            logger.error(f"Async handler failed: {e}")
+            logger.error(f"Async handler failed ({handler.__name__}): {e}")
             self.send_text(chat_id, f"❌ 处理失败: {str(e)[:100]}")
 
     def start_in_thread(self) -> None:
