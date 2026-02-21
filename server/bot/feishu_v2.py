@@ -16,6 +16,11 @@ from loguru import logger
 
 from server.settings import global_settings
 
+# Lock to serialize WebSocket startup across multiple bot instances.
+# The lark SDK uses a shared module-level `loop` variable; this lock
+# ensures each bot captures it before the next one overwrites it.
+_ws_startup_lock = threading.Lock()
+
 
 def markdown_to_feishu_post(text: str, title: str = "") -> dict:
     """Convert Telegram Markdown text to Feishu post (rich text) JSON.
@@ -90,6 +95,7 @@ class FeishuBotV2:
         self.admin_chat_id = admin_chat_id
         self._command_handlers: dict[str, Callable] = {}
         self._ws_client = None
+        self._own_loop: asyncio.AbstractEventLoop | None = None
         self._ws_thread: Optional[threading.Thread] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
 
@@ -271,41 +277,53 @@ class FeishuBotV2:
             log_level=lark.LogLevel.INFO,
         )
 
+        ready = threading.Event()
+
         def _run_ws():
             # The lark SDK uses a module-level `loop` variable grabbed at import time,
             # which is the main thread's event loop. We must replace it with a fresh
             # loop owned by this thread, otherwise run_until_complete() fails with
             # "This event loop is already running".
+            #
+            # When multiple bots start concurrently, they race on this shared variable.
+            # We use a lock to serialize: set ws_mod.loop → enter start() → release
+            # lock via call_soon once the loop is running.
             import lark_oapi.ws.client as ws_mod
 
             new_loop = asyncio.new_event_loop()
             asyncio.set_event_loop(new_loop)
+            self._own_loop = new_loop
+
+            _ws_startup_lock.acquire()
             ws_mod.loop = new_loop
+            new_loop.call_soon(lambda: _ws_startup_lock.release())
+            new_loop.call_soon(lambda: ready.set())
+
             if self._ws_client:
                 try:
                     self._ws_client.start()
                 except Exception as e:
+                    if _ws_startup_lock.locked():
+                        _ws_startup_lock.release()
+                    ready.set()
                     logger.error(f"Feishu WebSocket error: {e}")
 
         self._ws_thread = threading.Thread(
             target=_run_ws,
-            name="feishu-ws",
+            name=f"feishu-ws-{self.app_id[-4:]}",
             daemon=True,
         )
         self._ws_thread.start()
+        ready.wait(timeout=10)
         logger.info("Feishu WebSocket started in background thread")
 
     def stop(self) -> None:
         """Stop the WebSocket connection."""
         if self._ws_client:
             try:
-                # _disconnect() is a coroutine; run it on the thread's own loop
-                import lark_oapi.ws.client as ws_mod
-
-                if ws_mod.loop and ws_mod.loop.is_running():
-                    ws_mod.loop.call_soon_threadsafe(ws_mod.loop.stop)
-                elif ws_mod.loop and not ws_mod.loop.is_closed():
-                    ws_mod.loop.run_until_complete(self._ws_client._disconnect())
+                loop = getattr(self, "_own_loop", None)
+                if loop and loop.is_running():
+                    loop.call_soon_threadsafe(loop.stop)
                 logger.info("Feishu WebSocket connection stopped")
             except Exception as e:
                 logger.warning(f"Error stopping Feishu WebSocket: {e}")
