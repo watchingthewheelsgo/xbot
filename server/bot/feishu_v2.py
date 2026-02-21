@@ -281,12 +281,11 @@ class FeishuBotV2:
             new_loop = asyncio.new_event_loop()
             asyncio.set_event_loop(new_loop)
             ws_mod.loop = new_loop
-
-        if self._ws_client:
-            try:
-                self._ws_client.start()
-            except Exception as e:
-                logger.error(f"Feishu WebSocket error: {e}")
+            if self._ws_client:
+                try:
+                    self._ws_client.start()
+                except Exception as e:
+                    logger.error(f"Feishu WebSocket error: {e}")
 
         self._ws_thread = threading.Thread(
             target=_run_ws,
