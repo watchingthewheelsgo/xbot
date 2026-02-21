@@ -59,3 +59,10 @@ async def close_db() -> None:
     global engine
     if engine:
         await engine.dispose()
+
+
+def get_session_factory():
+    """获取会话工厂（用于调度器等需要直接创建会话的场景）"""
+    if AsyncSessionLocal is None:
+        raise RuntimeError("Database not initialized. Call init_db() first.")
+    return AsyncSessionLocal

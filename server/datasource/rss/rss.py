@@ -392,3 +392,87 @@ class RSSFetcher:
             )
 
             return feed_stats
+
+    async def validate_feed(self, url: str) -> tuple[bool, str, list[dict]]:
+        """Validate an RSS feed URL. Returns (ok, feed_title, latest_5_entries)."""
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                response = await client.get(url)
+                response.raise_for_status()
+
+            parsed = feedparser.parse(response.content)
+
+            if parsed.bozo and not parsed.entries:
+                return False, "", []
+
+            title = parsed.feed.get("title", "Unknown Feed")  # type: ignore[attr-defined]
+            entries = []
+            for entry in parsed.entries[:5]:
+                published_str = getattr(entry, "published", None) or getattr(
+                    entry, "updated", None
+                )
+                entries.append(
+                    {
+                        "title": entry.get("title", "Untitled"),
+                        "link": entry.get("link", ""),
+                        "published": self.parse_date(published_str).strftime(
+                            "%Y-%m-%d %H:%M"
+                        ),
+                    }
+                )
+
+            return True, title, entries
+
+        except Exception as e:
+            logger.error(f"Feed validation failed for {url}: {e}")
+            return False, "", []
+
+    def add_feed(
+        self, name: str, url: str, category: str = "custom", source: str = ""
+    ) -> bool:
+        """Add a new feed to config.json and in-memory list."""
+        # Check duplicate
+        for f in self.feeds:
+            if str(f.url) == url or f.name == name:
+                return False
+
+        new_feed = RSSFeedConfig(
+            name=name,
+            url=HttpUrl(url),
+            category=category,
+            source=source or name.lower(),
+        )
+        self.feeds.append(new_feed)
+        self._save_config()
+        return True
+
+    def remove_feed(self, name: str) -> bool:
+        """Remove a feed by name from config.json and in-memory list."""
+        for i, f in enumerate(self.feeds):
+            if f.name.lower() == name.lower():
+                self.feeds.pop(i)
+                self._save_config()
+                return True
+        return False
+
+    def _save_config(self) -> None:
+        """Write current feeds list back to config.json."""
+        try:
+            data = {
+                "version": "2.0",
+                "rss": [
+                    {
+                        "name": f.name,
+                        "description": f.description,
+                        "category": f.category,
+                        "url": str(f.url),
+                        "source": f.source,
+                    }
+                    for f in self.feeds
+                ],
+            }
+            with open(self.config_path, "w") as fp:
+                json.dump(data, fp, indent=2, ensure_ascii=False)
+            logger.info(f"Saved {len(self.feeds)} feeds to config")
+        except Exception as e:
+            logger.error(f"Failed to save RSS config: {e}")

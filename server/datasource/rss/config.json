@@ -1,25 +1,279 @@
 {
-    "rss": [
-        {
-            "name": "Hacker News",
-            "description": "Tech news and discussions",
-            "category": "technology",
-            "url": "https://news.ycombinator.com/rss",
-            "source": "hackernews"
-        },
-        {
-            "name": "TechCrunch",
-            "description": "The latest technology news and information on startups",
-            "category": "technology",
-            "url": "https://techcrunch.com/feed/",
-            "source": "techcrunch"
-        },
-        {
-            "name": "BBC News",
-            "description": "Latest news from BBC",
-            "category": "news",
-            "url": "http://feeds.bbci.co.uk/news/rss.xml",
-            "source": "bbc"
-        }
-    ]
+  "version": "2.0",
+  "rss": [
+    {
+      "name": "BBC World",
+      "description": "BBC world news",
+      "category": "world",
+      "url": "https://feeds.bbci.co.uk/news/world/rss.xml",
+      "source": "bbc"
+    },
+    {
+      "name": "NPR News",
+      "description": "NPR top stories",
+      "category": "politics",
+      "url": "https://feeds.npr.org/1001/rss.xml",
+      "source": "npr"
+    },
+    {
+      "name": "Guardian World",
+      "description": "The Guardian world news",
+      "category": "world",
+      "url": "https://www.theguardian.com/world/rss",
+      "source": "guardian"
+    },
+    {
+      "name": "NYT World",
+      "description": "New York Times world news",
+      "category": "world",
+      "url": "https://rss.nytimes.com/services/xml/rss/nyt/World.xml",
+      "source": "nyt"
+    },
+    {
+      "name": "Al Jazeera",
+      "description": "International news",
+      "category": "world",
+      "url": "https://www.aljazeera.com/xml/rss/all.xml",
+      "source": "aljazeera"
+    },
+    {
+      "name": "Hacker News",
+      "description": "Tech news and discussions",
+      "category": "tech",
+      "url": "https://hnrss.org/frontpage",
+      "source": "hackernews"
+    },
+    {
+      "name": "TechCrunch",
+      "description": "Technology news and startups",
+      "category": "tech",
+      "url": "https://techcrunch.com/feed/",
+      "source": "techcrunch"
+    },
+    {
+      "name": "Ars Technica",
+      "description": "Technology news and analysis",
+      "category": "tech",
+      "url": "https://feeds.arstechnica.com/arstechnica/technology-lab",
+      "source": "arstechnica"
+    },
+    {
+      "name": "The Verge",
+      "description": "Technology, science, art and culture",
+      "category": "tech",
+      "url": "https://www.theverge.com/rss/index.xml",
+      "source": "theverge"
+    },
+    {
+      "name": "Wired",
+      "description": "Technology and culture",
+      "category": "tech",
+      "url": "https://www.wired.com/feed/rss",
+      "source": "wired"
+    },
+    {
+      "name": "MIT Tech Review",
+      "description": "MIT Technology Review",
+      "category": "tech",
+      "url": "https://www.technologyreview.com/feed/",
+      "source": "mit"
+    },
+    {
+      "name": "BBC Business",
+      "description": "BBC business news",
+      "category": "finance",
+      "url": "https://feeds.bbci.co.uk/news/business/rss.xml",
+      "source": "bbc_business"
+    },
+    {
+      "name": "WSJ Markets",
+      "description": "Wall Street Journal markets",
+      "category": "finance",
+      "url": "https://feeds.a.dj.com/rss/RSSMarketsMain.xml",
+      "source": "wsj"
+    },
+    {
+      "name": "Federal Reserve",
+      "description": "Federal Reserve press releases",
+      "category": "gov",
+      "url": "https://www.federalreserve.gov/feeds/press_all.xml",
+      "source": "fed"
+    },
+    {
+      "name": "SEC Announcements",
+      "description": "Securities and Exchange Commission",
+      "category": "gov",
+      "url": "https://www.sec.gov/news/pressreleases.rss",
+      "source": "sec"
+    },
+    {
+      "name": "OpenAI Blog",
+      "description": "OpenAI research and news",
+      "category": "ai",
+      "url": "https://openai.com/news/rss.xml",
+      "source": "openai"
+    },
+    {
+      "name": "ArXiv AI",
+      "description": "AI research papers",
+      "category": "ai",
+      "url": "https://rss.arxiv.org/rss/cs.AI",
+      "source": "arxiv"
+    },
+    {
+      "name": "Defense One",
+      "description": "Defense and national security",
+      "category": "intel",
+      "url": "https://www.defenseone.com/rss/all/",
+      "source": "defenseone"
+    },
+    {
+      "name": "The Drive War Zone",
+      "description": "Military news",
+      "category": "intel",
+      "url": "https://www.twz.com/feed",
+      "source": "warzone"
+    },
+    {
+      "name": "The Diplomat",
+      "description": "Asia-Pacific affairs",
+      "category": "intel",
+      "url": "https://thediplomat.com/feed/",
+      "source": "diplomat"
+    },
+    {
+      "name": "Bellingcat",
+      "description": "Open source investigations",
+      "category": "intel",
+      "url": "https://www.bellingcat.com/feed/",
+      "source": "bellingcat"
+    },
+    {
+      "name": "Foreign Policy",
+      "description": "Global affairs and foreign policy",
+      "category": "intel",
+      "url": "https://foreignpolicy.com/feed/",
+      "source": "foreignpolicy"
+    },
+    {
+      "name": "Krebs Security",
+      "description": "Cybersecurity news",
+      "category": "cyber",
+      "url": "https://krebsonsecurity.com/feed/",
+      "source": "krebs"
+    },
+    {
+      "name": "Cointelegraph",
+      "description": "Crypto and blockchain news",
+      "category": "crypto",
+      "url": "https://cointelegraph.com/rss",
+      "source": "cointelegraph"
+    },
+    {
+      "name": "The Block",
+      "description": "Crypto research and news",
+      "category": "crypto",
+      "url": "https://www.theblock.co/rss.xml",
+      "source": "theblock"
+    },
+    {
+      "name": "Reddit WorldNews",
+      "description": "Reddit world news - hot posts",
+      "category": "reddit",
+      "url": "https://www.reddit.com/r/worldnews/.rss",
+      "source": "reddit_worldnews"
+    },
+    {
+      "name": "Reddit Technology",
+      "description": "Reddit technology discussions",
+      "category": "reddit",
+      "url": "https://www.reddit.com/r/technology/.rss",
+      "source": "reddit_tech"
+    },
+    {
+      "name": "Reddit Cryptocurrency",
+      "description": "Reddit crypto discussions",
+      "category": "reddit",
+      "url": "https://www.reddit.com/r/CryptoCurrency/.rss",
+      "source": "reddit_crypto"
+    },
+    {
+      "name": "Reddit Stocks",
+      "description": "Reddit stock market discussions",
+      "category": "reddit",
+      "url": "https://www.reddit.com/r/stocks/.rss",
+      "source": "reddit_stocks"
+    },
+    {
+      "name": "Reddit WallStreetBets",
+      "description": "WSB - retail investor sentiment",
+      "category": "reddit",
+      "url": "https://www.reddit.com/r/wallstreetbets/.rss",
+      "source": "reddit_wsb"
+    },
+    {
+      "name": "Reddit Geopolitics",
+      "description": "Geopolitical analysis and news",
+      "category": "reddit",
+      "url": "https://www.reddit.com/r/geopolitics/.rss",
+      "source": "reddit_geopolitics"
+    },
+    {
+      "name": "Reddit Economics",
+      "description": "Economic news and analysis",
+      "category": "reddit",
+      "url": "https://www.reddit.com/r/Economics/.rss",
+      "source": "reddit_economics"
+    }
+  ],
+  "disabled": [
+    {
+      "name": "DoD News",
+      "description": "Department of Defense news - URL redirects to war.gov",
+      "category": "gov",
+      "url": "https://www.defense.gov/DesktopModules/ArticleCS/RSS.ashx?max=10&ContentType=1&Site=945",
+      "source": "dod",
+      "reason": "301 redirect to war.gov"
+    },
+    {
+      "name": "CSIS",
+      "description": "Center for Strategic and International Studies",
+      "category": "intel",
+      "url": "https://www.csis.org/analysis/feed",
+      "source": "csis",
+      "reason": "404 not found"
+    },
+    {
+      "name": "Brookings",
+      "description": "Brookings Institution",
+      "category": "intel",
+      "url": "https://www.brookings.edu/feed/",
+      "source": "brookings",
+      "reason": "302 redirect to homepage, RSS discontinued"
+    },
+    {
+      "name": "CFR",
+      "description": "Council on Foreign Relations",
+      "category": "intel",
+      "url": "https://www.cfr.org/rss.xml",
+      "source": "cfr",
+      "reason": "404 not found"
+    },
+    {
+      "name": "Breaking Defense",
+      "description": "Defense news",
+      "category": "intel",
+      "url": "https://breakingdefense.com/feed/",
+      "source": "breakingdefense",
+      "reason": "403 forbidden"
+    },
+    {
+      "name": "CISA Alerts",
+      "description": "Cybersecurity alerts",
+      "category": "cyber",
+      "url": "https://www.cisa.gov/uscert/ncas/alerts.xml",
+      "source": "cisa",
+      "reason": "403 forbidden, RSS blocked"
+    }
+  ]
 }
