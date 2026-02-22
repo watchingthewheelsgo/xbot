@@ -12,4 +12,6 @@ RUN uv sync --frozen --no-dev --no-install-project
 COPY server/ server/
 COPY main.py ./
 
-CMD ["uv", "run", "python", "main.py"]
+# Ensure data directory and db file exist
+VOLUME /app/data
+CMD ["sh", "-c", "touch /app/data/xbot.db && DATABASE_URL=sqlite+aiosqlite:///./data/xbot.db uv run python main.py"]

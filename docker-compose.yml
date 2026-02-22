@@ -4,5 +4,4 @@ services:
     restart: unless-stopped
     env_file: .env
     volumes:
-      - ./xbot.db:/app/xbot.db
-      - ./server/datasource/rss/config.json:/app/server/datasource/rss/config.json
+      - ./data:/app/data
