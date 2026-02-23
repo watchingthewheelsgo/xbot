@@ -552,41 +552,65 @@ class DataScheduler:
         return result
 
     async def _get_recent_news(self, hours: float = 1) -> list[dict]:
-        """Get recent news articles from database."""
-        if not self._db_session_factory:
-            return []
+        """Get recent news articles from database and Finnhub."""
+        news_items = []
 
-        try:
-            from sqlalchemy import select
-            from server.datastore.models import RSSArticleDB
+        # Get RSS articles from database
+        if self._db_session_factory:
+            try:
+                from sqlalchemy import select
+                from server.datastore.models import RSSArticleDB
 
+                cutoff = datetime.utcnow() - timedelta(hours=hours)
+
+                async with self._db_session_factory() as session:
+                    query = (
+                        select(RSSArticleDB)
+                        .where(RSSArticleDB.fetched_at >= cutoff)
+                        .order_by(RSSArticleDB.fetched_at.desc())
+                        .limit(200)
+                    )
+
+                    result = await session.execute(query)
+                    articles = result.scalars().all()
+
+                    for a in articles:
+                        news_items.append(
+                            {
+                                "title": a.title,
+                                "source": a.feed_name,
+                                "source_type": "rss",
+                                "published": a.published,
+                                "summary": a.summary,
+                                "link": a.link,
+                                "category": getattr(a, "category", ""),
+                            }
+                        )
+            except Exception as e:
+                logger.error(f"Failed to get RSS news: {e}")
+
+        # Get Finnhub news from memory cache
+        if self._latest_finnhub_news:
             cutoff = datetime.utcnow() - timedelta(hours=hours)
+            for fn in self._latest_finnhub_news:
+                if fn.published_at >= cutoff:
+                    news_items.append(
+                        {
+                            "title": fn.headline,
+                            "source": fn.source,
+                            "source_type": "finnhub",
+                            "published": fn.published_at,
+                            "summary": fn.summary,
+                            "link": fn.url,
+                            "category": fn.category,
+                            "related_symbols": fn.related_symbols,
+                        }
+                    )
 
-            async with self._db_session_factory() as session:
-                query = (
-                    select(RSSArticleDB)
-                    .where(RSSArticleDB.fetched_at >= cutoff)
-                    .order_by(RSSArticleDB.fetched_at.desc())
-                    .limit(200)
-                )
+        # Sort by published date
+        news_items.sort(key=lambda x: x.get("published", datetime.min), reverse=True)
 
-                result = await session.execute(query)
-                articles = result.scalars().all()
-
-                return [
-                    {
-                        "title": a.title,
-                        "source": a.feed_name,
-                        "published": a.published,
-                        "summary": a.summary,
-                        "link": a.link,
-                        "category": getattr(a, "category", ""),
-                    }
-                    for a in articles
-                ]
-        except Exception as e:
-            logger.error(f"Failed to get recent news: {e}")
-            return []
+        return news_items
 
     async def _build_report_context(self, hours: int = 24) -> Any:
         """Build report context from available data."""

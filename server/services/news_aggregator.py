@@ -19,6 +19,7 @@ class NewsItem(BaseModel):
     sources: list[dict] = Field(default_factory=list)  # [{name, link, published}]
     category: str = ""
     published: datetime
+    source_type: str = ""  # "rss", "finnhub", "reddit", etc.
 
     # LLM-generated analysis
     chinese_summary: str = ""
@@ -279,6 +280,7 @@ class NewsAggregator:
                 sources=sources,
                 category=primary.get("category", ""),
                 published=primary.get("published", datetime.utcnow()),
+                source_type=primary.get("source_type", ""),
             )
 
             result.append(item)

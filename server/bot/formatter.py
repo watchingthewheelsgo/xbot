@@ -14,6 +14,30 @@ def escape_md(text: str) -> str:
     return text
 
 
+def format_source_label(source_type: str, source_name: str = "") -> str:
+    """Format news source as a label.
+
+    Examples:
+        [RSS - Bloomberg]
+        [Finnhub]
+        [Reddit - r/stocks]
+    """
+    if not source_type:
+        return ""
+
+    source_type = source_type.lower()
+
+    if source_type == "rss":
+        return f"[RSS - {source_name}]" if source_name else "[RSS]"
+    elif source_type == "finnhub":
+        return "[Finnhub]"
+    elif source_type == "reddit":
+        return f"[Reddit - {source_name}]" if source_name else "[Reddit]"
+    else:
+        # Generic format for unknown types
+        return f"[{source_type.upper()}{f' - {source_name}' if source_name else ''}]"
+
+
 def format_change(value: float) -> str:
     """Format a percentage change with sign and emoji."""
     if value > 0:
@@ -63,7 +87,7 @@ def format_news_digest_with_analysis(
     items = items[:max_items]
 
     for i, item in enumerate(items, 1):
-        # Title with importance indicator
+        # Title with importance indicator and source label
         importance = ""
         if item.importance >= 4:
             importance = "🔴"
@@ -72,7 +96,16 @@ def format_news_digest_with_analysis(
         elif item.importance == 2:
             importance = "🟡"
 
-        lines.append(f"*{i}.* {importance} {escape_md(item.title[:80])}")
+        # Get source label
+        source_name = item.sources[0].get("name", "") if item.sources else ""
+        source_label = format_source_label(item.source_type, source_name)
+
+        # Format title with source (label before title)
+        title_text = escape_md(item.title[:80])
+        if source_label:
+            title_text = f"{source_label} {title_text}"
+
+        lines.append(f"*{i}.* {importance} {title_text}")
 
         # Chinese summary
         if item.chinese_summary:
@@ -150,11 +183,20 @@ def format_news_digest_simple(
         title = item.title[:80]
         safe_title = escape_md(title)
 
+        # Get source label
+        source_name = item.sources[0].get("name", "") if item.sources else ""
+        source_label = format_source_label(item.source_type, source_name)
+
+        # Format title with source (label before title)
+        title_with_source = safe_title
+        if source_label:
+            title_with_source = f"{source_label} {safe_title}"
+
         # Sources count
         if item.source_count > 1:
-            lines.append(f"*{i}.* {safe_title} ({item.source_count}个来源)")
+            lines.append(f"*{i}.* {title_with_source} ({item.source_count}个来源)")
         else:
-            lines.append(f"*{i}.* {safe_title}")
+            lines.append(f"*{i}.* {title_with_source}")
 
         # Add first link
         if item.sources and item.sources[0].get("link"):
@@ -283,7 +325,16 @@ def format_morning_briefing(
     highlights = [h for h in highlights if h.importance >= 3][:5]
 
     for i, item in enumerate(highlights, 1):
-        lines.append(f"*{i}.* {escape_md(item.title[:70])}")
+        # Get source label
+        source_name = item.sources[0].get("name", "") if item.sources else ""
+        source_label = format_source_label(item.source_type, source_name)
+
+        # Format title with source (label before title)
+        title_text = escape_md(item.title[:70])
+        if source_label:
+            title_text = f"{source_label} {title_text}"
+
+        lines.append(f"*{i}.* {title_text}")
 
         if item.chinese_summary:
             lines.append(f"   _{item.chinese_summary}_")
@@ -325,7 +376,16 @@ def format_evening_briefing(
     lines.append("*今日要闻*")
 
     for i, item in enumerate(highlights[:5], 1):
-        lines.append(f"{i}. {escape_md(item.title[:70])}")
+        # Get source label
+        source_name = item.sources[0].get("name", "") if item.sources else ""
+        source_label = format_source_label(item.source_type, source_name)
+
+        # Format title with source (label before title)
+        title_text = escape_md(item.title[:70])
+        if source_label:
+            title_text = f"{source_label} {title_text}"
+
+        lines.append(f"{i}. {title_text}")
 
         if item.chinese_summary:
             lines.append(f"   _{item.chinese_summary}_")
