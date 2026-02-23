@@ -199,6 +199,13 @@ class NewsAggregator:
         if not articles:
             return []
 
+        import time
+
+        start_time = time.time()
+        logger.info(
+            f"[聚合] 输入 {len(articles)} 条文章，时间窗口 {time_window_minutes} 分钟"
+        )
+
         cutoff = datetime.utcnow() - timedelta(minutes=time_window_minutes)
 
         # Filter by time and sort by published date
@@ -217,6 +224,7 @@ class NewsAggregator:
                     pass
 
         recent.sort(key=lambda x: x.get("published", datetime.min), reverse=True)
+        logger.info(f"[聚合] 时间窗口过滤后剩余 {len(recent)} 条文章")
 
         # Group similar articles
         groups: list[list[dict]] = []
@@ -244,8 +252,11 @@ class NewsAggregator:
 
             groups.append(group)
 
+        logger.info(f"[聚合] 相似度分组后得到 {len(groups)} 个组")
+
         # Convert groups to NewsItems
         result: list[NewsItem] = []
+        skipped_by_hash = 0
         for group in groups:
             # Use first (most recent) article as primary
             primary = group[0]
@@ -270,6 +281,7 @@ class NewsAggregator:
 
             # Skip if we've seen this hash recently
             if item_id in self._seen_hashes:
+                skipped_by_hash += 1
                 continue
             self._seen_hashes.add(item_id)
 
@@ -285,9 +297,20 @@ class NewsAggregator:
 
             result.append(item)
 
+        if skipped_by_hash > 0:
+            logger.info(
+                f"[聚合] 因 seen_hash 跳过了 {skipped_by_hash} 条重复新闻（缓存大小：{len(self._seen_hashes)}）"
+            )
+
         # Limit seen hashes to prevent memory growth
         if len(self._seen_hashes) > 10000:
             self._seen_hashes = set(list(self._seen_hashes)[-5000:])
+            logger.info(
+                f"[聚合] seen_hash 缓存已清理，当前大小 {len(self._seen_hashes)}"
+            )
+
+        elapsed = time.time() - start_time
+        logger.info(f"[聚合] 完成得到 {len(result)} 条聚合新闻，耗时 {elapsed:.2f}s")
 
         return result
 
@@ -312,12 +335,17 @@ class NewsAnalyzer:
 
         Returns items with chinese_summary and market_impact filled in.
         """
+        import time
+
         if not self.llm or not items:
+            logger.info("[LLM分析] 跳过：LLM未配置或无新闻")
             return items
 
         items_to_analyze = items[:max_items]
+        logger.info(f"[LLM分析] 开始分析 {len(items_to_analyze)} 条新闻")
 
         # Build prompt
+        prompt_start = time.time()
         articles_text = "\n\n".join(
             [
                 f"Article {i + 1}:\nTitle: {item.title}\nSources: {', '.join(item.source_names)}\nSummary: {item.summary[:300] if item.summary else 'N/A'}"
@@ -353,10 +381,17 @@ class NewsAnalyzer:
 {articles_text}
 
 只输出JSON数组，不要其他内容。"""
+        prompt_elapsed = time.time() - prompt_start
+        logger.info(
+            f"[LLM分析] Prompt 构建完成，耗时 {prompt_elapsed:.2f}s，长度约 {len(prompt)} 字符"
+        )
 
         from server.ai.schema import Message
 
         try:
+            llm_start = time.time()
+            logger.info("[LLM分析] 开始调用 LLM API...")
+
             response = await self.llm.ask(
                 messages=[Message.user_message(prompt)],
                 system_msgs=[
@@ -369,7 +404,14 @@ class NewsAnalyzer:
                 temperature=0.3,
             )
 
-            # Parse JSON response
+            llm_elapsed = time.time() - llm_start
+            logger.info(
+                f"[LLM分析] LLM API 调用完成，耗时 {llm_elapsed:.2f}s，响应长度 {len(response)} 字符"
+            )
+
+            # Parse JSON response with enhanced error handling
+            parse_start = time.time()
+
             import json
             import re
 
@@ -380,10 +422,61 @@ class NewsAnalyzer:
                 if response.startswith("json"):
                     response = response[4:]
 
+            # Find JSON array content (handle cases where there's extra text)
+            json_match = re.search(r"\[\s*\{", response)
+            if json_match:
+                response = response[json_match.start() :]
+
             # Strip trailing commas before } or ] (common LLM mistake)
             response = re.sub(r",\s*([}\]])", r"\1", response)
 
-            analyses = json.loads(response)
+            # Fix common JSON issues: single quotes instead of double quotes
+            # Only replace single quotes that are property names or string values, not in content
+            response = re.sub(r"'([^']*)':\s*'", r'"\1": "', response)
+            response = re.sub(r"'([^']*)':\s*\{", r'"\1": {', response)
+
+            # Handle unescaped newlines in strings
+            response = re.sub(r'\n(?!\s*["{}\[\],])', r"\\n", response)
+
+            try:
+                analyses = json.loads(response)
+            except json.JSONDecodeError as json_err:
+                # Try to fix more issues and retry
+                logger.warning(f"JSON parse error, attempting fixes: {json_err}")
+
+                # Remove any text after the closing bracket
+                match = re.search(r"\]\s*$", response)
+                if match:
+                    pass  # already clean at end
+                else:
+                    # Find where JSON ends
+                    bracket_count = 0
+                    json_end = -1
+                    for i, char in enumerate(response):
+                        if char == "[":
+                            bracket_count += 1
+                        elif char == "]":
+                            bracket_count -= 1
+                            if bracket_count == 0:
+                                json_end = i + 1
+                                break
+                    if json_end > 0:
+                        response = response[:json_end]
+
+                try:
+                    analyses = json.loads(response)
+                    logger.info("Successfully parsed JSON after fixes")
+                except json.JSONDecodeError as e2:
+                    logger.error(f"JSON parsing failed even after fixes: {e2}")
+                    logger.error(
+                        f"Response content (first 500 chars): {response[:500]}"
+                    )
+                    raise e2
+
+            parse_elapsed = time.time() - parse_start
+            logger.info(
+                f"[LLM分析] JSON 解析完成，耗时 {parse_elapsed:.2f}s，得到 {len(analyses)} 条分析"
+            )
 
             # Apply analyses to items
             for i, item in enumerate(items_to_analyze):
@@ -395,10 +488,14 @@ class NewsAnalyzer:
                     item.action = analysis.get("action", "")
                     item.importance = analysis.get("importance", 0)
 
+            logger.info(f"[LLM分析] 分析完成，成功更新 {len(items_to_analyze)} 条新闻")
             return items
 
         except Exception as e:
             logger.error(f"News analysis failed: {e}")
+            import traceback
+
+            logger.error(f"Traceback: {traceback.format_exc()}")
             return items
 
     async def analyze_single(self, item: NewsItem) -> NewsItem:

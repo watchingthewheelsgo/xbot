@@ -18,9 +18,9 @@ def format_source_label(source_type: str, source_name: str = "") -> str:
     """Format news source as a label.
 
     Examples:
-        [RSS - Bloomberg]
-        [Finnhub]
-        [Reddit - r/stocks]
+        \[RSS - Bloomberg\]
+        \[Finnhub\]
+        \[Reddit - r/stocks\]
     """
     if not source_type:
         return ""
@@ -28,14 +28,16 @@ def format_source_label(source_type: str, source_name: str = "") -> str:
     source_type = source_type.lower()
 
     if source_type == "rss":
-        return f"[RSS - {source_name}]" if source_name else "[RSS]"
+        return f"\\[RSS - {source_name}\\]" if source_name else "\\[RSS\\]"
     elif source_type == "finnhub":
-        return "[Finnhub]"
+        return "\\[Finnhub\\]"
     elif source_type == "reddit":
-        return f"[Reddit - {source_name}]" if source_name else "[Reddit]"
+        return f"\\[Reddit - {source_name}\\]" if source_name else "\\[Reddit\\]"
     else:
         # Generic format for unknown types
-        return f"[{source_type.upper()}{f' - {source_name}' if source_name else ''}]"
+        return (
+            f"\\[{source_type.upper()}{f' - {source_name}' if source_name else ''}\\]"
+        )
 
 
 def format_change(value: float) -> str:

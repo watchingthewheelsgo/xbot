@@ -553,11 +553,19 @@ class DataScheduler:
 
     async def _get_recent_news(self, hours: float = 1) -> list[dict]:
         """Get recent news articles from database and Finnhub."""
+        import time
+
+        start_time = time.time()
+        logger.info(f"[新闻获取] 开始获取最近 {hours} 小时的新闻...")
+
         news_items = []
+        rss_count = 0
+        finnhub_count = 0
 
         # Get RSS articles from database
         if self._db_session_factory:
             try:
+                rss_start = time.time()
                 from sqlalchemy import select
                 from server.datastore.models import RSSArticleDB
 
@@ -586,10 +594,18 @@ class DataScheduler:
                                 "category": getattr(a, "category", ""),
                             }
                         )
+                    rss_count = len(articles)
+
+                rss_elapsed = time.time() - rss_start
+                logger.info(
+                    f"[新闻获取] RSS 获取完成，耗时 {rss_elapsed:.2f}s，共 {rss_count} 条"
+                )
+
             except Exception as e:
                 logger.error(f"Failed to get RSS news: {e}")
 
         # Get Finnhub news from memory cache
+        finnhub_start = time.time()
         if self._latest_finnhub_news:
             cutoff = datetime.utcnow() - timedelta(hours=hours)
             for fn in self._latest_finnhub_news:
@@ -606,9 +622,22 @@ class DataScheduler:
                             "related_symbols": fn.related_symbols,
                         }
                     )
+            finnhub_count = len(
+                [n for n in news_items if n.get("source_type") == "finnhub"]
+            )
+
+        finnhub_elapsed = time.time() - finnhub_start
+        logger.info(
+            f"[新闻获取] Finnhub 获取完成，耗时 {finnhub_elapsed:.2f}s，共 {finnhub_count} 条"
+        )
 
         # Sort by published date
         news_items.sort(key=lambda x: x.get("published", datetime.min), reverse=True)
+
+        total_elapsed = time.time() - start_time
+        logger.info(
+            f"[新闻获取] 完成，总耗时 {total_elapsed:.2f}s（RSS {rss_count} + Finnhub {finnhub_count} = 总共 {len(news_items)} 条）"
+        )
 
         return news_items
 
