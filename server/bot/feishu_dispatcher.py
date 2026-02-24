@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from server.datasource.scheduler import DataScheduler
     from server.analysis.correlation import CorrelationEngine
     from server.reports.generator import ReportGenerator
+    from server.services.news_processor import NewsProcessor
 
 
 class FeishuCommandDispatcher:
@@ -30,16 +31,53 @@ class FeishuCommandDispatcher:
         correlation_engine: "CorrelationEngine | None" = None,
         report_generator: "ReportGenerator | None" = None,
         rss_fetcher=None,
+        news_processor: "NewsProcessor | None" = None,
     ):
         self.scheduler = scheduler
         self.correlation_engine = correlation_engine
         self.report_generator = report_generator
         self.rss_fetcher = rss_fetcher
+        self.news_processor = news_processor
 
     async def handle_news(self, event: dict) -> str:
         """Handle /news command - show recent news with analysis."""
         chat_id = event.get("chat_id")
         logger.info(f"/news command from Feishu chat {chat_id}")
+
+        try:
+            # Use unified news processor if available
+            if self.news_processor:
+                items = await self.news_processor.get_and_process_news(
+                    hours=2,
+                    max_items=8,
+                    filter_pushed=False,  # /news shows all news
+                    push_type="command",
+                    use_cache=True,
+                )
+
+                if not items:
+                    return "📰 暂无最新新闻"
+
+                # Format and return
+                if any(item.chinese_summary for item in items):
+                    message = format_news_digest_with_analysis(items, max_items=8)
+                else:
+                    message = format_news_digest_simple(items, max_items=8)
+
+                logger.info(f"News sent to Feishu chat {chat_id}")
+                return message
+            else:
+                # Legacy fallback
+                return await self._handle_news_legacy(event)
+
+        except Exception as e:
+            logger.error(f"News command failed: {e}")
+            return f"❌ 获取失败: {str(e)[:100]}"
+
+    async def _handle_news_legacy(self, event: dict) -> str:
+        """Legacy /news handler (fallback when NewsProcessor not available)."""
+        chat_id = event.get("chat_id")
+        logger.info(f"/news command (legacy) from Feishu chat {chat_id}")
 
         try:
             # Get recent news (last 2 hours)
@@ -71,11 +109,11 @@ class FeishuCommandDispatcher:
             else:
                 message = format_news_digest_simple(aggregated, max_items=8)
 
-            logger.info(f"News sent to Feishu chat {chat_id}")
+            logger.info(f"News sent (legacy) to Feishu chat {chat_id}")
             return message
 
         except Exception as e:
-            logger.error(f"News command failed: {e}")
+            logger.error(f"News command (legacy) failed: {e}")
             return f"❌ 获取失败: {str(e)[:100]}"
 
     async def handle_crypto(self, event: dict) -> str:

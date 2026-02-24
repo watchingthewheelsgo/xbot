@@ -17,6 +17,8 @@ if TYPE_CHECKING:
     from server.bot.feishu_v2 import FeishuBotV2
     from server.analysis.correlation import CorrelationEngine
     from server.reports.generator import ReportGenerator
+    from server.services.news_processor import NewsProcessor
+    from server.datasource.source_manager import SourceManager
 
 
 class DataScheduler:
@@ -48,12 +50,16 @@ class DataScheduler:
         self.latest_crypto_data: list[Any] = []
         self._previous_crypto_data: list[Any] = []  # For comparison
 
-        # News aggregator
+        # News processor (unified)
+        self._news_processor: Optional["NewsProcessor"] = None
+        self._source_manager: Optional["SourceManager"] = None
+
+        # Legacy components (kept for backward compatibility)
         self._news_aggregator = None
         self._news_analyzer = None
         self._latest_finnhub_news: list[Any] = []
 
-        # Push state
+        # Push state (legacy, maintained for compatibility)
         self._last_news_push: Optional[datetime] = None
         self._last_crypto_push: Optional[datetime] = None
         self._pushed_news_ids: set[str] = set()
@@ -98,6 +104,15 @@ class DataScheduler:
         self._news_aggregator = NewsAggregator(similarity_threshold=0.5)
         if report_generator:
             self._news_analyzer = NewsAnalyzer(llm=report_generator.llm)
+
+    def set_news_processor(
+        self,
+        news_processor: Optional["NewsProcessor"] = None,
+        source_manager: Optional["SourceManager"] = None,
+    ) -> None:
+        """Inject the unified news processor and source manager."""
+        self._news_processor = news_processor
+        self._source_manager = source_manager
 
     @property
     def _has_push_bot(self) -> bool:
@@ -176,82 +191,119 @@ class DataScheduler:
             return
 
         try:
-            from server.bot.formatter import (
-                format_news_digest_with_analysis,
-                format_news_digest_simple,
-            )
-
-            # Get recent news (last 10 minutes to catch new items)
-            news_items = await self._get_recent_news(hours=0.17)  # ~10 min
-
-            # Merge Finnhub news into the mix
-            if self._latest_finnhub_news:
-                for fn in self._latest_finnhub_news:
-                    if fn.news_id not in self._pushed_finnhub_ids:
-                        news_items.append(
-                            {
-                                "title": fn.headline,
-                                "source": fn.source,
-                                "published": fn.published_at,
-                                "summary": fn.summary,
-                                "link": fn.url,
-                                "category": fn.category,
-                                "finnhub_id": fn.news_id,
-                            }
-                        )
-
-            # Aggregate and deduplicate
-            aggregated = []
-            if self._news_aggregator and news_items:
-                aggregated = self._news_aggregator.aggregate(
-                    news_items, time_window_minutes=10
+            # Use unified news processor if available
+            if self._news_processor:
+                items = await self._news_processor.get_and_process_news(
+                    hours=0.17,  # ~10 min
+                    max_items=5,
+                    filter_pushed=True,
+                    push_type="digest",
+                    use_cache=True,
                 )
 
-            # Filter out already pushed news
-            new_items = [
-                item for item in aggregated if item.id not in self._pushed_news_ids
-            ]
+                if not items:
+                    return
 
-            # If no new items, skip silently
-            if not new_items:
-                return
+                # Format and send
+                from server.bot.formatter import (
+                    format_news_digest_with_analysis,
+                    format_news_digest_simple,
+                )
 
-            # Analyze with LLM if available
-            if self._news_analyzer and self._report_generator:
-                try:
-                    new_items = await self._news_analyzer.analyze_batch(
-                        new_items, max_items=5
-                    )
-                except Exception as e:
-                    logger.warning(f"News analysis failed: {e}")
+                if any(item.chinese_summary for item in items):
+                    message = format_news_digest_with_analysis(items, max_items=5)
+                else:
+                    message = format_news_digest_simple(items, max_items=5)
 
-            # Format and send
-            if any(item.chinese_summary for item in new_items):
-                message = format_news_digest_with_analysis(new_items, max_items=5)
+                await self._push_message(message)
+
+                # Mark as pushed in database
+                await self._news_processor.mark_as_pushed(items, push_type="digest")
+
+                self._last_news_push = datetime.utcnow()
+                logger.info(f"News digest pushed: {len(items)} items")
             else:
-                message = format_news_digest_simple(new_items, max_items=5)
-
-            await self._push_message(message)
-
-            # Mark as pushed
-            for item in new_items:
-                self._pushed_news_ids.add(item.id)
-                # Also mark Finnhub IDs
-                for src in item.sources:
-                    if "finnhub_id" in src:
-                        self._pushed_finnhub_ids.add(src["finnhub_id"])
-
-            # Limit cache size
-            if len(self._pushed_news_ids) > 1000:
-                self._pushed_news_ids = set(list(self._pushed_news_ids)[-500:])
-            if len(self._pushed_finnhub_ids) > 500:
-                self._pushed_finnhub_ids = set(list(self._pushed_finnhub_ids)[-250:])
-
-            self._last_news_push = datetime.utcnow()
-            logger.info(f"News digest pushed: {len(new_items)} items")
+                # Legacy fallback
+                await self._news_digest_push_job_legacy()
 
         except Exception as e:
             logger.error(f"News digest push failed: {e}")
+
+    async def _news_digest_push_job_legacy(self) -> None:
+        """Legacy news digest push (fallback when NewsProcessor not available)."""
+        from server.bot.formatter import (
+            format_news_digest_with_analysis,
+            format_news_digest_simple,
+        )
+
+        # Get recent news (last 10 minutes to catch new items)
+        news_items = await self._get_recent_news(hours=0.17)  # ~10 min
+
+        # Merge Finnhub news into the mix
+        if self._latest_finnhub_news:
+            for fn in self._latest_finnhub_news:
+                if fn.news_id not in self._pushed_finnhub_ids:
+                    news_items.append(
+                        {
+                            "title": fn.headline,
+                            "source": fn.source,
+                            "published": fn.published_at,
+                            "summary": fn.summary,
+                            "link": fn.url,
+                            "category": fn.category,
+                            "finnhub_id": fn.news_id,
+                        }
+                    )
+
+        # Aggregate and deduplicate
+        aggregated = []
+        if self._news_aggregator and news_items:
+            aggregated = self._news_aggregator.aggregate(
+                news_items, time_window_minutes=10
+            )
+
+        # Filter out already pushed news
+        new_items = [
+            item for item in aggregated if item.id not in self._pushed_news_ids
+        ]
+
+        # If no new items, skip silently
+        if not new_items:
+            return
+
+        # Analyze with LLM if available
+        if self._news_analyzer and self._report_generator:
+            try:
+                new_items = await self._news_analyzer.analyze_batch(
+                    new_items, max_items=5
+                )
+            except Exception as e:
+                logger.warning(f"News analysis failed: {e}")
+
+        # Format and send
+        if any(item.chinese_summary for item in new_items):
+            message = format_news_digest_with_analysis(new_items, max_items=5)
+        else:
+            message = format_news_digest_simple(new_items, max_items=5)
+
+        await self._push_message(message)
+
+        # Mark as pushed
+        for item in new_items:
+            self._pushed_news_ids.add(item.id)
+            # Also mark Finnhub IDs
+            for src in item.sources:
+                if "finnhub_id" in src:
+                    self._pushed_finnhub_ids.add(src["finnhub_id"])
+
+        # Limit cache size
+        if len(self._pushed_news_ids) > 1000:
+            self._pushed_news_ids = set(list(self._pushed_news_ids)[-500:])
+        if len(self._pushed_finnhub_ids) > 500:
+            self._pushed_finnhub_ids = set(list(self._pushed_finnhub_ids)[-250:])
+
+        self._last_news_push = datetime.utcnow()
+        logger.info(f"News digest pushed (legacy): {len(new_items)} items")
 
     async def _crypto_update_push_job(self) -> None:
         """Push crypto update with comparison every 5 minutes."""
@@ -280,52 +332,101 @@ class DataScheduler:
             return
 
         try:
-            from server.bot.formatter import format_morning_briefing
-
-            # Get news from last 12 hours
-            news_items = await self._get_recent_news(hours=12)
-            if not news_items:
-                return
-
-            # Aggregate
-            if self._news_aggregator:
-                aggregated = self._news_aggregator.aggregate(
-                    news_items, time_window_minutes=720
+            # Use unified processor if available
+            if self._news_processor:
+                items = await self._news_processor.get_and_process_news(
+                    hours=12,
+                    max_items=10,
+                    filter_pushed=False,  # Briefing shows all important news
+                    push_type="morning",
+                    use_cache=True,
                 )
+
+                if not items:
+                    return
+
+                # Filter by importance (>=3 for briefing)
+                items = [i for i in items if i.importance >= 3][:5]
+
+                if not items:
+                    return
+
+                # Build market summary
+                market_summary = ""
+                if self.latest_market_data.get("indices"):
+                    indices = self.latest_market_data["indices"]
+                    parts = []
+                    for idx in indices[:3]:
+                        if isinstance(idx, dict):
+                            name = idx.get("name", "")
+                            change = idx.get("change_percent", 0) or 0
+                            sign = "+" if change >= 0 else ""
+                            parts.append(f"{name} {sign}{change:.1f}%")
+                    if parts:
+                        market_summary = " | ".join(parts)
+
+                from server.bot.formatter import format_morning_briefing
+
+                message = format_morning_briefing(
+                    highlights=items,
+                    market_summary=market_summary,
+                    date=datetime.utcnow(),
+                )
+
+                await self._push_message(message)
+                logger.info("Morning briefing pushed")
             else:
-                return
-
-            # Analyze top items
-            if self._news_analyzer and aggregated:
-                aggregated = await self._news_analyzer.analyze_batch(
-                    aggregated, max_items=10
-                )
-
-            # Build market summary
-            market_summary = ""
-            if self.latest_market_data.get("indices"):
-                indices = self.latest_market_data["indices"]
-                parts = []
-                for idx in indices[:3]:
-                    if isinstance(idx, dict):
-                        name = idx.get("name", "")
-                        change = idx.get("change_percent", 0) or 0
-                        sign = "+" if change >= 0 else ""
-                        parts.append(f"{name} {sign}{change:.1f}%")
-                if parts:
-                    market_summary = " | ".join(parts)
-
-            message = format_morning_briefing(
-                highlights=aggregated,
-                market_summary=market_summary,
-                date=datetime.utcnow(),
-            )
-
-            await self._push_message(message)
-            logger.info("Morning briefing pushed")
+                # Legacy fallback
+                await self._morning_briefing_job_legacy()
 
         except Exception as e:
             logger.error(f"Morning briefing push failed: {e}")
+
+    async def _morning_briefing_job_legacy(self) -> None:
+        """Legacy morning briefing push (fallback when NewsProcessor not available)."""
+        from server.bot.formatter import format_morning_briefing
+
+        # Get news from last 12 hours
+        news_items = await self._get_recent_news(hours=12)
+        if not news_items:
+            return
+
+        # Aggregate
+        if self._news_aggregator:
+            aggregated = self._news_aggregator.aggregate(
+                news_items, time_window_minutes=720
+            )
+        else:
+            return
+
+        # Analyze top items
+        if self._news_analyzer and aggregated:
+            aggregated = await self._news_analyzer.analyze_batch(
+                aggregated, max_items=10
+            )
+
+        # Build market summary
+        market_summary = ""
+        if self.latest_market_data.get("indices"):
+            indices = self.latest_market_data["indices"]
+            parts = []
+            for idx in indices[:3]:
+                if isinstance(idx, dict):
+                    name = idx.get("name", "")
+                    change = idx.get("change_percent", 0) or 0
+                    sign = "+" if change >= 0 else ""
+                    parts.append(f"{name} {sign}{change:.1f}%")
+            if parts:
+                market_summary = " | ".join(parts)
+
+        message = format_morning_briefing(
+            highlights=aggregated,
+            market_summary=market_summary,
+            date=datetime.utcnow(),
+        )
+
+        await self._push_message(message)
+        logger.info("Morning briefing pushed (legacy)")
 
     async def _evening_briefing_job(self) -> None:
         """Push evening briefing at 20:00 UTC."""
@@ -333,36 +434,67 @@ class DataScheduler:
             return
 
         try:
-            from server.bot.formatter import format_evening_briefing
-
-            # Get news from last 12 hours
-            news_items = await self._get_recent_news(hours=12)
-            if not news_items:
-                return
-
-            # Aggregate
-            if self._news_aggregator:
-                aggregated = self._news_aggregator.aggregate(
-                    news_items, time_window_minutes=720
+            # Use unified processor if available
+            if self._news_processor:
+                items = await self._news_processor.get_and_process_news(
+                    hours=12,
+                    max_items=10,
+                    filter_pushed=False,  # Briefing shows all important news
+                    push_type="evening",
+                    use_cache=True,
                 )
+
+                if not items:
+                    return
+
+                # Filter by importance (>=3 for briefing)
+                items = [i for i in items if i.importance >= 3][:5]
+
+                if not items:
+                    return
+
+                from server.bot.formatter import format_evening_briefing
+
+                message = format_evening_briefing(
+                    highlights=items, date=datetime.utcnow()
+                )
+
+                await self._push_message(message)
+                logger.info("Evening briefing pushed")
             else:
-                return
-
-            # Analyze top items
-            if self._news_analyzer and aggregated:
-                aggregated = await self._news_analyzer.analyze_batch(
-                    aggregated, max_items=10
-                )
-
-            message = format_evening_briefing(
-                highlights=aggregated, date=datetime.utcnow()
-            )
-
-            await self._push_message(message)
-            logger.info("Evening briefing pushed")
+                # Legacy fallback
+                await self._evening_briefing_job_legacy()
 
         except Exception as e:
             logger.error(f"Evening briefing push failed: {e}")
+
+    async def _evening_briefing_job_legacy(self) -> None:
+        """Legacy evening briefing push (fallback when NewsProcessor not available)."""
+        from server.bot.formatter import format_evening_briefing
+
+        # Get news from last 12 hours
+        news_items = await self._get_recent_news(hours=12)
+        if not news_items:
+            return
+
+        # Aggregate
+        if self._news_aggregator:
+            aggregated = self._news_aggregator.aggregate(
+                news_items, time_window_minutes=720
+            )
+        else:
+            return
+
+        # Analyze top items
+        if self._news_analyzer and aggregated:
+            aggregated = await self._news_analyzer.analyze_batch(
+                aggregated, max_items=10
+            )
+
+        message = format_evening_briefing(highlights=aggregated, date=datetime.utcnow())
+
+        await self._push_message(message)
+        logger.info("Evening briefing pushed (legacy)")
 
     async def _finnhub_news_job(self) -> None:
         """Fetch Finnhub market news and merge into news digest."""

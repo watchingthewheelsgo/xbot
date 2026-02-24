@@ -5,9 +5,13 @@ News aggregation service with deduplication and LLM analysis.
 import hashlib
 import re
 from datetime import datetime, timedelta
+from typing import TYPE_CHECKING
 
 from loguru import logger
 from pydantic import BaseModel, Field
+
+if TYPE_CHECKING:
+    from server.datasource.source_manager import SourceManager
 
 
 class NewsItem(BaseModel):
@@ -20,6 +24,7 @@ class NewsItem(BaseModel):
     category: str = ""
     published: datetime
     source_type: str = ""  # "rss", "finnhub", "reddit", etc.
+    source_priority: int = 50  # Source priority (0-100)
 
     # LLM-generated analysis
     chinese_summary: str = ""
@@ -142,9 +147,14 @@ class NewsAggregator:
         "update",
     }
 
-    def __init__(self, similarity_threshold: float = 0.5):
+    def __init__(
+        self,
+        similarity_threshold: float = 0.5,
+        source_manager: "SourceManager | None" = None,
+    ):
         self.similarity_threshold = similarity_threshold
         self._seen_hashes: set[str] = set()
+        self._source_manager = source_manager
 
     def _normalize_text(self, text: str) -> str:
         """Normalize text for comparison."""
@@ -184,17 +194,21 @@ class NewsAggregator:
         return intersection / union if union > 0 else 0.0
 
     def aggregate(
-        self, articles: list[dict], time_window_minutes: int = 60
+        self,
+        articles: list[dict],
+        time_window_minutes: int = 60,
+        source_manager: "SourceManager | None" = None,
     ) -> list[NewsItem]:
         """
-        Aggregate articles, grouping similar stories.
+        Aggregate articles, grouping similar stories, and sort by source priority.
 
         Args:
             articles: List of article dicts with title, link, source, published, summary
             time_window_minutes: Only consider articles within this window
+            source_manager: Optional source manager for priority lookup
 
         Returns:
-            List of aggregated NewsItem objects
+            List of aggregated NewsItem objects sorted by priority
         """
         if not articles:
             return []
@@ -285,6 +299,22 @@ class NewsAggregator:
                 continue
             self._seen_hashes.add(item_id)
 
+            # Calculate source priority
+            source_priority = 50  # Default priority
+            source_type = primary.get("source_type", "")
+            sm = source_manager or self._source_manager
+            if sm:
+                if source_type == "finnhub":
+                    source_priority = sm.get_finnhub_priority()
+                else:
+                    # Get highest priority among sources
+                    for source_dict in sources:
+                        feed_priority = sm.get_feed_priority(
+                            source_dict.get("name", "")
+                        )
+                        if feed_priority > source_priority:
+                            source_priority = feed_priority
+
             item = NewsItem(
                 id=item_id,
                 title=primary.get("title", ""),
@@ -292,7 +322,8 @@ class NewsAggregator:
                 sources=sources,
                 category=primary.get("category", ""),
                 published=primary.get("published", datetime.utcnow()),
-                source_type=primary.get("source_type", ""),
+                source_type=source_type,
+                source_priority=source_priority,
             )
 
             result.append(item)
@@ -309,6 +340,9 @@ class NewsAggregator:
                 f"[聚合] seen_hash 缓存已清理，当前大小 {len(self._seen_hashes)}"
             )
 
+        # Sort by source priority and published time
+        result.sort(key=lambda x: (x.source_priority, x.published), reverse=True)
+
         elapsed = time.time() - start_time
         logger.info(f"[聚合] 完成得到 {len(result)} 条聚合新闻，耗时 {elapsed:.2f}s")
 
@@ -324,14 +358,16 @@ class NewsAnalyzer:
     Analyzes news items using LLM for market impact and summaries.
     """
 
-    def __init__(self, llm=None):
+    def __init__(self, llm=None, session_factory=None):
         self.llm = llm
+        self.session_factory = session_factory
 
     async def analyze_batch(
         self, items: list[NewsItem], max_items: int = 10
     ) -> list[NewsItem]:
         """
         Analyze a batch of news items with LLM.
+        Uses cache if session_factory is configured.
 
         Returns items with chinese_summary and market_impact filled in.
         """
@@ -343,6 +379,64 @@ class NewsAnalyzer:
 
         items_to_analyze = items[:max_items]
         logger.info(f"[LLM分析] 开始分析 {len(items_to_analyze)} 条新闻")
+
+        # Try to use cache first
+        uncached_items = []
+        if self.session_factory:
+            try:
+                from server.datastore.repositories import NewsAnalysisCacheRepository
+                from server.datastore.engine import get_session_factory as get_sf
+
+                sf = (
+                    self.session_factory if callable(self.session_factory) else get_sf()
+                )
+
+                async with sf() as cache_session:  # type: ignore[misc]
+                    cache_repo = NewsAnalysisCacheRepository(cache_session)
+
+                    # Check cache for each item
+                    cache_hits = 0
+                    for item in items_to_analyze:
+                        cached = await cache_repo.get(item.id)
+                        if cached:
+                            # Use cached result
+                            item.chinese_summary = cached["chinese_summary"]
+                            item.background = cached["background"]
+                            item.market_impact = cached["market_impact"]
+                            item.action = cached["action"]
+                            item.importance = cached["importance"]
+                            cache_hits += 1
+                            logger.debug(f"[LLM缓存] 命中: {item.title[:30]}...")
+                        else:
+                            uncached_items.append(item)
+
+                    logger.info(
+                        f"[LLM分析] 缓存命中 {cache_hits}/{len(items_to_analyze)}，需分析 {len(uncached_items)} 条"
+                    )
+
+                    # If all cached, cleanup expired entries
+                    if cache_hits == len(items_to_analyze):
+                        deleted = await cache_repo.cleanup_expired()
+                        if deleted > 0:
+                            logger.info(f"[LLM缓存] 清理过期 {deleted} 条")
+
+            except Exception as e:
+                logger.warning(f"[LLM缓存] 缓存操作失败: {e}")
+                uncached_items = items_to_analyze
+        else:
+            uncached_items = items_to_analyze
+
+        # If no items need analysis, return early
+        if not uncached_items:
+            return items
+
+        # Limit items to analyze to avoid truncation
+        # 5 items is safe for most LLMs with 4k-8k context
+        if len(uncached_items) > 5:
+            logger.info(f"[LLM分析] 减少分析数量避免截断：{len(uncached_items)} -> 5")
+            uncached_items = uncached_items[:5]
+
+        # Proceed with LLM analysis for uncached items
 
         # Build prompt
         prompt_start = time.time()
@@ -380,7 +474,7 @@ class NewsAnalyzer:
 新闻文章：
 {articles_text}
 
-只输出JSON数组，不要其他内容。"""
+只输出JSON数组，确保格式正确且完整。"""
         prompt_elapsed = time.time() - prompt_start
         logger.info(
             f"[LLM分析] Prompt 构建完成，耗时 {prompt_elapsed:.2f}s，长度约 {len(prompt)} 字符"
@@ -413,73 +507,77 @@ class NewsAnalyzer:
             parse_start = time.time()
 
             import json
-            import re
 
             # Clean response - extract JSON array
             response = response.strip()
-            if response.startswith("```"):
-                response = response.split("```")[1]
-                if response.startswith("json"):
-                    response = response[4:]
 
-            # Find JSON array content (handle cases where there's extra text)
-            json_match = re.search(r"\[\s*\{", response)
+            # Handle markdown code blocks
+            code_blocks = re.findall(r"```(?:json)?\s*([^`]*?)```", response)
+            if code_blocks:
+                response = code_blocks[-1]  # Take last code block
+
+            # Find JSON array content
+            json_match = re.search(r"\\[\s*\\{", response)
             if json_match:
                 response = response[json_match.start() :]
 
-            # Strip trailing commas before } or ] (common LLM mistake)
-            response = re.sub(r",\s*([}\]])", r"\1", response)
+            # Fix common JSON issues
+            # 1. Strip trailing commas
+            response = re.sub(r",\s*([}\\]])", r"\\1", response)
 
-            # Fix common JSON issues: single quotes instead of double quotes
-            # Only replace single quotes that are property names or string values, not in content
-            response = re.sub(r"'([^']*)':\s*'", r'"\1": "', response)
-            response = re.sub(r"'([^']*)':\s*\{", r'"\1": {', response)
+            # 2. Fix single quotes in property names
+            response = re.sub(r"'([^']*)':\s*[\"]", r'"\\1": "', response)
+            response = re.sub(r"'([^']*)':\s*{", r'"\\1": {', response)
 
-            # Handle unescaped newlines in strings
-            response = re.sub(r'\n(?!\s*["{}\[\],])', r"\\n", response)
+            # 3. Handle Chinese quotation marks
+            response = response.replace('"', '"')
+            response = response.replace('"', '"')
+            response = response.replace('"', "'")
+            response = response.replace('"', "'")
 
+            # 4. Try to parse with increasing tolerance
+            analyses = []
             try:
                 analyses = json.loads(response)
-            except json.JSONDecodeError as json_err:
-                # Try to fix more issues and retry
-                logger.warning(f"JSON parse error, attempting fixes: {json_err}")
+            except json.JSONDecodeError as parse_err:
+                logger.warning(f"JSON parse error, attempting fixes: {parse_err}")
 
-                # Remove any text after the closing bracket
-                match = re.search(r"\]\s*$", response)
-                if match:
-                    pass  # already clean at end
-                else:
-                    # Find where JSON ends
-                    bracket_count = 0
-                    json_end = -1
-                    for i, char in enumerate(response):
-                        if char == "[":
-                            bracket_count += 1
-                        elif char == "]":
-                            bracket_count -= 1
-                            if bracket_count == 0:
-                                json_end = i + 1
+                # Try to fix by finding the last complete object
+                # Use a more robust approach: try to close incomplete JSON
+                if "Unterminated string" in str(parse_err):
+                    # Find last complete closing brace
+                    last_complete_idx = -1
+                    for i in range(len(response) - 1, 0, -1):
+                        if response[i] == "]" and response[i] in "}]":
+                            # Check if this creates balanced brackets
+                            test_json = response[: i + 1]
+                            try:
+                                json.loads(test_json)
+                                last_complete_idx = i + 1
                                 break
-                    if json_end > 0:
-                        response = response[:json_end]
+                            except Exception:
+                                continue
 
+                    if last_complete_idx > 0:
+                        response = response[:last_complete_idx]
+                        logger.info(f"Truncated response to index {last_complete_idx}")
+
+                # Parse again
                 try:
                     analyses = json.loads(response)
                     logger.info("Successfully parsed JSON after fixes")
-                except json.JSONDecodeError as e2:
-                    logger.error(f"JSON parsing failed even after fixes: {e2}")
-                    logger.error(
-                        f"Response content (first 500 chars): {response[:500]}"
-                    )
-                    raise e2
+                except json.JSONDecodeError:
+                    logger.error("JSON parsing failed even after fixes")
+                    logger.error(f"JSON parsing failed: {parse_err}")
+                    # Return empty analyses instead of crashing
+                    analyses = []
 
             parse_elapsed = time.time() - parse_start
             logger.info(
                 f"[LLM分析] JSON 解析完成，耗时 {parse_elapsed:.2f}s，得到 {len(analyses)} 条分析"
             )
-
             # Apply analyses to items
-            for i, item in enumerate(items_to_analyze):
+            for i, item in enumerate(uncached_items):
                 if i < len(analyses):
                     analysis = analyses[i]
                     item.chinese_summary = analysis.get("summary", "")
@@ -488,7 +586,45 @@ class NewsAnalyzer:
                     item.action = analysis.get("action", "")
                     item.importance = analysis.get("importance", 0)
 
-            logger.info(f"[LLM分析] 分析完成，成功更新 {len(items_to_analyze)} 条新闻")
+            # Save to cache if session_factory available
+            if self.session_factory and uncached_items:
+                try:
+                    from server.datastore.repositories import (
+                        NewsAnalysisCacheRepository,
+                    )
+                    from server.datastore.engine import get_session_factory as get_sf
+
+                    sf = (
+                        self.session_factory
+                        if callable(self.session_factory)
+                        else get_sf()
+                    )
+
+                    async with sf() as save_session:  # type: ignore[misc]
+                        cache_repo = NewsAnalysisCacheRepository(save_session)
+
+                        for i, item in enumerate(uncached_items):
+                            if i < len(analyses):
+                                analysis = analyses[i]
+                                await cache_repo.set(
+                                    news_hash=item.id,
+                                    chinese_summary=analysis.get("summary", ""),
+                                    background=analysis.get("background", ""),
+                                    market_impact=analysis.get("impact", {}),
+                                    action=analysis.get("action", ""),
+                                    importance=analysis.get("importance", 0),
+                                    ttl_hours=24,
+                                )
+
+                        await save_session.commit()
+                        logger.info(
+                            f"[LLM缓存] 保存 {len(uncached_items)} 条分析结果到缓存"
+                        )
+
+                except Exception as e:
+                    logger.warning(f"[LLM缓存] 保存缓存失败: {e}")
+
+            logger.info(f"[LLM分析] 分析完成，成功更新 {len(uncached_items)} 条新闻")
             return items
 
         except Exception as e:

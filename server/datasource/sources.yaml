@@ -1,0 +1,203 @@
+version: "1.0"
+
+# 消息源优先级配置
+# 优先级范围: 0-100, 数值越大优先级越高
+sources:
+  finnhub:
+    priority: 100
+    enabled: true
+    update_interval_minutes: 15
+    description: "Finnhub市场新闻 - 金融数据源"
+
+  rss_categories:
+    # 金融类 RSS - 高优先级
+    - name: "finance"
+      priority: 85
+      enabled: true
+      description: "金融类RSS源"
+      feeds:
+        - name: "WSJ Markets"
+          url: "https://feeds.a.dj.com/rss/RSSMarketsMain.xml"
+          priority: 90
+          enabled: true
+        - name: "BBC Business"
+          url: "https://feeds.bbci.co.uk/news/business/rss.xml"
+          priority: 85
+          enabled: true
+
+    # AI类 RSS - 高优先级
+    - name: "ai"
+      priority: 75
+      enabled: true
+      description: "AI新闻RSS源"
+      feeds:
+        - name: "OpenAI Blog"
+          url: "https://openai.com/news/rss.xml"
+          priority: 80
+          enabled: true
+        - name: "ArXiv AI"
+          url: "https://rss.arxiv.org/rss/cs.AI"
+          priority: 70
+          enabled: true
+
+    # 网络安全类 RSS
+    - name: "cyber"
+      priority: 72
+      enabled: true
+      description: "网络安全RSS源"
+      feeds:
+        - name: "Krebs Security"
+          url: "https://krebsonsecurity.com/feed/"
+          priority: 75
+          enabled: true
+
+    # 情报/防务类 RSS
+    - name: "intel"
+      priority: 70
+      enabled: true
+      description: "情报/防务类RSS源"
+      feeds:
+        - name: "Defense One"
+          url: "https://www.defenseone.com/rss/all/"
+          priority: 75
+          enabled: true
+        - name: "The Drive War Zone"
+          url: "https://www.twz.com/feed"
+          priority: 70
+          enabled: true
+        - name: "The Diplomat"
+          url: "https://thediplomat.com/feed/"
+          priority: 68
+          enabled: true
+        - name: "Bellingcat"
+          url: "https://www.bellingcat.com/feed/"
+          priority: 67
+          enabled: true
+        - name: "Foreign Policy"
+          url: "https://foreignpolicy.com/feed/"
+          priority: 65
+          enabled: true
+
+    # 科技类 RSS - 中等优先级
+    - name: "tech"
+      priority: 65
+      enabled: true
+      description: "科技类RSS源"
+      feeds:
+        - name: "TechCrunch"
+          url: "https://techcrunch.com/feed/"
+          priority: 70
+          enabled: true
+        - name: "The Verge"
+          url: "https://www.theverge.com/rss/index.xml"
+          priority: 65
+          enabled: true
+        - name: "Wired"
+          url: "https://www.wired.com/feed/rss"
+          priority: 63
+          enabled: true
+        - name: "Ars Technica"
+          url: "https://feeds.arstechnica.com/arstechnica/technology-lab"
+          priority: 62
+          enabled: true
+        - name: "MIT Tech Review"
+          url: "https://www.technologyreview.com/feed/"
+          priority: 60
+          enabled: true
+        - name: "Hacker News"
+          url: "https://hnrss.org/frontpage"
+          priority: 55
+          enabled: true
+
+    # 世界新闻 RSS - 较低优先级
+    - name: "world"
+      priority: 55
+      enabled: true
+      description: "世界新闻RSS源"
+      feeds:
+        - name: "BBC World"
+          url: "https://feeds.bbci.co.uk/news/world/rss.xml"
+          priority: 60
+          enabled: true
+        - name: "NYT World"
+          url: "https://rss.nytimes.com/services/xml/rss/nyt/World.xml"
+          priority: 58
+          enabled: true
+        - name: "Guardian World"
+          url: "https://www.theguardian.com/world/rss"
+          priority: 56
+          enabled: true
+        - name: "NPR News"
+          url: "https://feeds.npr.org/1001/rss.xml"
+          priority: 54
+          enabled: true
+        - name: "Al Jazeera"
+          url: "https://www.aljazeera.com/xml/rss/all.xml"
+          priority: 52
+          enabled: true
+
+    # 政府类 RSS
+    - name: "gov"
+      priority: 60
+      enabled: true
+      description: "政府机构RSS源"
+      feeds:
+        - name: "Federal Reserve"
+          url: "https://www.federalreserve.gov/feeds/press_all.xml"
+          priority: 65
+          enabled: true
+        - name: "SEC Announcements"
+          url: "https://www.sec.gov/news/pressreleases.rss"
+          priority: 63
+          enabled: true
+
+    # 加密货币 RSS - 低优先级
+    - name: "crypto"
+      priority: 50
+      enabled: true
+      description: "加密货币RSS源"
+      feeds:
+        - name: "Cointelegraph"
+          url: "https://cointelegraph.com/rss"
+          priority: 55
+          enabled: true
+        - name: "The Block"
+          url: "https://www.theblock.co/rss.xml"
+          priority: 50
+          enabled: true
+
+    # Reddit 讨论 - 最低优先级
+    - name: "reddit"
+      priority: 40
+      enabled: true
+      description: "Reddit讨论 - 较低优先级"
+      min_upvotes: 50  # 只推送超过50票的内容
+      feeds:
+        - name: "r/worldnews"
+          url: "https://www.reddit.com/r/worldnews/.rss"
+          priority: 45
+          enabled: true
+        - name: "r/technology"
+          url: "https://www.reddit.com/r/technology/.rss"
+          priority: 42
+          enabled: true
+        - name: "r/CryptoCurrency"
+          url: "https://www.reddit.com/r/CryptoCurrency/.rss"
+          priority: 40
+          enabled: true
+        - name: "r/stocks"
+          url: "https://www.reddit.com/r/stocks/.rss"
+          priority: 40
+          enabled: true
+        - name: "r/wallstreetbets"
+          url: "https://www.reddit.com/r/wallstreetbets/.rss"
+          priority: 35
+          enabled: true
+        - name: "r/geopolitics"
+          url: "https://www.reddit.com/r/geopolitics/.rss"
+          priority: 42
+          enabled: true
+        - name: "r/Economics"
+          url: "https://www.reddit.com/r/Economics/.rss"
+          priority: 41
+          enabled: true

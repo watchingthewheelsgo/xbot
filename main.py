@@ -72,6 +72,12 @@ async def main() -> None:
         report_generator = ReportGenerator()
         logger.info("Report generator initialized")
 
+    # 初始化源管理器
+    from server.datasource.source_manager import SourceManager
+
+    source_manager = SourceManager()
+    logger.info(f"Source manager initialized: {source_manager.get_status()}")
+
     # 初始化统一调度器
     from server.datasource.scheduler import DataScheduler
 
@@ -101,12 +107,14 @@ async def main() -> None:
             correlation_engine=correlation_engine,
             report_generator=report_generator,
             rss_fetcher=rss_fetcher,
+            news_processor=None,  # Will be set after database init
         )
         register_commands(telegram_bot, dispatcher)
         logger.info("Telegram bot initialized with commands")
 
     # 初始化 Feishu Bot (在同进程的后台线程中运行)
     feishu_bot = None
+    feishu_dispatcher = None
     if settings.is_feishu_configured():
         from server.bot.feishu_v2 import FeishuBotV2
         from server.bot.feishu_dispatcher import (
@@ -126,6 +134,7 @@ async def main() -> None:
             correlation_engine=correlation_engine,
             report_generator=report_generator,
             rss_fetcher=rss_fetcher,
+            news_processor=None,  # Will be set after database init
         )
         register_feishu_commands(feishu_bot, feishu_dispatcher)
         logger.info("Feishu bot initialized with commands")
@@ -150,6 +159,37 @@ async def main() -> None:
                 report_generator=report_generator,
                 db_session_factory=get_session_factory(),
             )
+
+        # 初始化统一新闻处理器（需要在数据库初始化之后）
+        from server.services.news_aggregator import NewsAggregator, NewsAnalyzer
+        from server.services.news_processor import NewsProcessor
+
+        news_aggregator = NewsAggregator(
+            similarity_threshold=0.5, source_manager=source_manager
+        )
+        news_analyzer = (
+            NewsAnalyzer(llm=report_generator.llm) if report_generator else None
+        )
+
+        news_processor = NewsProcessor(
+            session_factory=get_session_factory(),
+            source_manager=source_manager,
+            news_aggregator=news_aggregator,
+            news_analyzer=news_analyzer,
+            scheduler=scheduler,
+        )
+        logger.info("News processor initialized")
+
+        # 设置新闻处理器和调度器的关联
+        scheduler.set_news_processor(
+            news_processor=news_processor, source_manager=source_manager
+        )
+
+        # 更新 dispatcher 使用新的 news_processor
+        if telegram_bot and dispatcher:
+            dispatcher.news_processor = news_processor
+        if feishu_bot and feishu_dispatcher:
+            feishu_dispatcher.news_processor = news_processor
 
         # 启动 Feishu Bot WebSocket (后台线程)
         if feishu_bot:

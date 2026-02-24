@@ -175,3 +175,52 @@ class WatchlistDB(Base):
         DateTime, default=datetime.now, nullable=False
     )
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
+class NewsPushLogDB(Base):
+    """新闻推送日志表 - 记录已推送新闻，防止重复推送"""
+
+    __tablename__ = "news_push_log"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    news_hash: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    push_type: Mapped[str] = mapped_column(
+        String(20), default="digest", index=True
+    )  # digest, briefing, morning, evening, command
+    pushed_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.now, index=True
+    )
+
+    __table_args__ = (
+        Index("idx_news_push_hash", "news_hash"),
+        Index("idx_news_push_type", "push_type"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<NewsPushLog(hash={self.news_hash[:8]}..., type={self.push_type})>"
+
+
+class NewsAnalysisCacheDB(Base):
+    """LLM分析结果缓存表"""
+
+    __tablename__ = "news_analysis_cache"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    news_hash: Mapped[str] = mapped_column(
+        String(50), unique=True, nullable=False, index=True
+    )
+    chinese_summary: Mapped[str] = mapped_column(Text, default="")
+    background: Mapped[str] = mapped_column(Text, default="")
+    market_impact_json: Mapped[str] = mapped_column(Text, default="")  # JSON string
+    action: Mapped[str] = mapped_column(String(500), default="")
+    importance: Mapped[int] = mapped_column(Integer, default=0)
+    cached_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
+
+    __table_args__ = (
+        Index("idx_cache_hash", "news_hash"),
+        Index("idx_cache_expires", "expires_at"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<NewsAnalysisCache(hash={self.news_hash[:8]}..., importance={self.importance})>"

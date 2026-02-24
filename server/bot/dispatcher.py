@@ -1,5 +1,6 @@
 """Telegram command handlers (dispatcher)."""
 
+import time
 from datetime import datetime
 from typing import TYPE_CHECKING
 
@@ -23,6 +24,7 @@ if TYPE_CHECKING:
     from server.datasource.scheduler import DataScheduler
     from server.analysis.correlation import CorrelationEngine
     from server.reports.generator import ReportGenerator
+    from server.services.news_processor import NewsProcessor
 
 
 class CommandDispatcher:
@@ -34,11 +36,13 @@ class CommandDispatcher:
         correlation_engine: "CorrelationEngine | None" = None,
         report_generator: "ReportGenerator | None" = None,
         rss_fetcher=None,
+        news_processor: "NewsProcessor | None" = None,
     ):
         self.scheduler = scheduler
         self.correlation_engine = correlation_engine
         self.report_generator = report_generator
         self.rss_fetcher = rss_fetcher
+        self.news_processor = news_processor
 
     async def handle_news(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
@@ -56,84 +60,129 @@ class CommandDispatcher:
         await update.message.reply_text("⏳ 正在获取最新新闻...")
 
         try:
-            # Step 1: Get recent news (last 2 hours)
-            logger.info("[Step 1/4] 开始获取新闻...")
-            step1_start = time.time()
+            # Use unified news processor if available
+            if self.news_processor:
+                items = await self.news_processor.get_and_process_news(
+                    hours=2,
+                    max_items=8,
+                    filter_pushed=False,  # /news command shows all news
+                    push_type="command",
+                    use_cache=True,
+                )
 
-            news_items = await self.scheduler._get_recent_news(hours=2)
+                if not items:
+                    await update.message.reply_text("📰 暂无最新新闻")
+                    return
 
-            step1_elapsed = time.time() - step1_start
-            logger.info(
-                f"[Step 1/4] 新闻获取完成，耗时 {step1_elapsed:.2f}s，共 {len(news_items)} 条"
-            )
+                # Format and send
+                if any(item.chinese_summary for item in items):
+                    message = format_news_digest_with_analysis(items, max_items=8)
+                else:
+                    message = format_news_digest_simple(items, max_items=8)
 
-            if not news_items:
-                await update.message.reply_text("📰 暂无最新新闻")
-                return
+                await update.message.reply_text(
+                    message,
+                    parse_mode=ParseMode.MARKDOWN,
+                    disable_web_page_preview=True,
+                )
 
-            # Step 2: Aggregate and deduplicate
-            logger.info("[Step 2/4] 开始聚合和去重...")
-            step2_start = time.time()
-
-            from server.services.news_aggregator import NewsAggregator, NewsAnalyzer
-
-            aggregator = NewsAggregator(similarity_threshold=0.5)
-            aggregated = aggregator.aggregate(news_items, time_window_minutes=120)
-
-            step2_elapsed = time.time() - step2_start
-            logger.info(
-                f"[Step 2/4] 聚合完成，耗时 {step2_elapsed:.2f}s，得到 {len(aggregated)} 条去重新闻"
-            )
-
-            if not aggregated:
-                await update.message.reply_text("📰 暂无最新新闻")
-                return
-
-            # Step 3: Analyze with LLM if available
-            if self.report_generator:
-                logger.info("[Step 3/4] 开始 LLM 分析...")
-                step3_start = time.time()
-
-                try:
-                    analyzer = NewsAnalyzer(llm=self.report_generator.llm)
-                    aggregated = await analyzer.analyze_batch(aggregated, max_items=8)
-                    step3_elapsed = time.time() - step3_start
-                    logger.info(f"[Step 3/4] LLM 分析完成，耗时 {step3_elapsed:.2f}s")
-                except Exception as e:
-                    step3_elapsed = time.time() - step3_start
-                    logger.warning(
-                        f"[Step 3/4] LLM 分析失败，耗时 {step3_elapsed:.2f}s: {e}"
-                    )
+                total_elapsed = time.time() - start_time
+                logger.info(
+                    f"[DONE] /news command completed, sent {len(items)} items, took {total_elapsed:.2f}s"
+                )
             else:
-                logger.info("[Step 3/4] 跳过 LLM 分析（report_generator 未配置）")
-
-            # Step 4: Format and send
-            logger.info("[Step 4/4] 开始格式化消息...")
-            step4_start = time.time()
-
-            if any(item.chinese_summary for item in aggregated):
-                message = format_news_digest_with_analysis(aggregated, max_items=8)
-            else:
-                message = format_news_digest_simple(aggregated, max_items=8)
-
-            await update.message.reply_text(
-                message, parse_mode=ParseMode.MARKDOWN, disable_web_page_preview=True
-            )
-            step4_elapsed = time.time() - step4_start
-            logger.info(f"[Step 4/4] 消息发送完成，耗时 {step4_elapsed:.2f}s")
-
-            total_elapsed = time.time() - start_time
-            logger.info(
-                f"[DONE] /news 命令执行完成，总耗时 {total_elapsed:.2f}s，发送到 chat {chat_id}"
-            )
+                # Legacy fallback - use existing logic
+                await self._handle_news_legacy(update, context, start_time, chat_id)
 
         except Exception as e:
             total_elapsed = time.time() - start_time
-            logger.error(f"[ERROR] /news 命令执行失败，耗时 {total_elapsed:.2f}s: {e}")
+            logger.error(
+                f"[ERROR] /news command failed after {total_elapsed:.2f}s: {e}"
+            )
             import traceback
 
             logger.error(f"Traceback: {traceback.format_exc()}")
             await update.message.reply_text(f"❌ 获取失败: {str(e)[:100]}")
+
+    async def _handle_news_legacy(
+        self,
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE,
+        start_time: float,
+        chat_id: int,
+    ) -> None:
+        """Legacy /news handler (fallback when NewsProcessor not available)."""
+        assert update.message is not None
+        # Step 1: Get recent news (last 2 hours)
+        logger.info("[Step 1/4] 开始获取新闻...")
+        step1_start = time.time()
+
+        news_items = await self.scheduler._get_recent_news(hours=2)
+
+        step1_elapsed = time.time() - step1_start
+        logger.info(
+            f"[Step 1/4] 新闻获取完成，耗时 {step1_elapsed:.2f}s，共 {len(news_items)} 条"
+        )
+
+        if not news_items:
+            await update.message.reply_text("📰 暂无最新新闻")
+            return
+
+        # Step 2: Aggregate and deduplicate
+        logger.info("[Step 2/4] 开始聚合和去重...")
+        step2_start = time.time()
+
+        from server.services.news_aggregator import NewsAggregator, NewsAnalyzer
+
+        aggregator = NewsAggregator(similarity_threshold=0.5)
+        aggregated = aggregator.aggregate(news_items, time_window_minutes=120)
+
+        step2_elapsed = time.time() - step2_start
+        logger.info(
+            f"[Step 2/4] 聚合完成，耗时 {step2_elapsed:.2f}s，得到 {len(aggregated)} 条去重新闻"
+        )
+
+        if not aggregated:
+            await update.message.reply_text("📰 暂无最新新闻")
+            return
+
+        # Step 3: Analyze with LLM if available
+        if self.report_generator:
+            logger.info("[Step 3/4] 开始 LLM 分析...")
+            step3_start = time.time()
+
+            try:
+                analyzer = NewsAnalyzer(llm=self.report_generator.llm)
+                aggregated = await analyzer.analyze_batch(aggregated, max_items=8)
+                step3_elapsed = time.time() - step3_start
+                logger.info(f"[Step 3/4] LLM 分析完成，耗时 {step3_elapsed:.2f}s")
+            except Exception as e:
+                step3_elapsed = time.time() - step3_start
+                logger.warning(
+                    f"[Step 3/4] LLM 分析失败，耗时 {step3_elapsed:.2f}s: {e}"
+                )
+        else:
+            logger.info("[Step 3/4] 跳过 LLM 分析（report_generator 未配置）")
+
+        # Step 4: Format and send
+        logger.info("[Step 4/4] 开始格式化消息...")
+        step4_start = time.time()
+
+        if any(item.chinese_summary for item in aggregated):
+            message = format_news_digest_with_analysis(aggregated, max_items=8)
+        else:
+            message = format_news_digest_simple(aggregated, max_items=8)
+
+        await update.message.reply_text(
+            message, parse_mode=ParseMode.MARKDOWN, disable_web_page_preview=True
+        )
+        step4_elapsed = time.time() - step4_start
+        logger.info(f"[Step 4/4] 消息发送完成，耗时 {step4_elapsed:.2f}s")
+
+        total_elapsed = time.time() - start_time
+        logger.info(
+            f"[DONE] /news 命令执行完成，总耗时 {total_elapsed:.2f}s，发送到 chat {chat_id}"
+        )
 
     async def handle_crypto(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
