@@ -431,19 +431,19 @@ class NewsAnalyzer:
             return items
 
         # Limit items to analyze to avoid truncation
-        # 5 items is safe for most LLMs with 4k-8k context
-        if len(uncached_items) > 5:
-            logger.info(f"[LLM分析] 减少分析数量避免截断：{len(uncached_items)} -> 5")
-            uncached_items = uncached_items[:5]
+        # Analyze up to 8 items, use 32K max_tokens for complete response
+        if len(uncached_items) > 8:
+            logger.info(f"[LLM分析] 减少分析数量：{len(uncached_items)} -> 8")
+            uncached_items = uncached_items[:8]
 
         # Proceed with LLM analysis for uncached items
 
-        # Build prompt
+        # Build prompt - use uncached_items, not items_to_analyze!
         prompt_start = time.time()
         articles_text = "\n\n".join(
             [
-                f"Article {i + 1}:\nTitle: {item.title}\nSources: {', '.join(item.source_names)}\nSummary: {item.summary[:300] if item.summary else 'N/A'}"
-                for i, item in enumerate(items_to_analyze)
+                f"Article {i + 1}:\nTitle: {item.title}\nSources: {', '.join(item.source_names)}\nSummary: {item.summary[:200] if item.summary else 'N/A'}"
+                for i, item in enumerate(uncached_items)
             ]
         )
 
@@ -484,6 +484,7 @@ class NewsAnalyzer:
 
         try:
             llm_start = time.time()
+            logger.info(f"[LLM分析] LLM max_tokens: {self.llm.max_tokens}")
             logger.info("[LLM分析] 开始调用 LLM API...")
 
             response = await self.llm.ask(
@@ -496,6 +497,7 @@ class NewsAnalyzer:
                 ],
                 stream=False,
                 temperature=0.3,
+                max_tokens=32000,  # Use 32K tokens for complete analysis
             )
 
             llm_elapsed = time.time() - llm_start
@@ -516,24 +518,29 @@ class NewsAnalyzer:
             if code_blocks:
                 response = code_blocks[-1]  # Take last code block
 
-            # Find JSON array content
-            json_match = re.search(r"\\[\s*\\{", response)
-            if json_match:
-                response = response[json_match.start() :]
+            # Find JSON array content - look for [
+            json_start = response.find("[")
+            if json_start >= 0:
+                response = response[json_start:]
+
+            # Find JSON array end - look for matching ]
+            json_end = response.rfind("]")
+            if json_end >= 0:
+                response = response[: json_end + 1]
+
+            logger.info(f"[LLM分析] 提取后的 JSON 长度: {len(response)} 字符")
 
             # Fix common JSON issues
             # 1. Strip trailing commas
-            response = re.sub(r",\s*([}\\]])", r"\\1", response)
+            response = re.sub(r",\s*([}\]])", r"\1", response)
 
             # 2. Fix single quotes in property names
-            response = re.sub(r"'([^']*)':\s*[\"]", r'"\\1": "', response)
-            response = re.sub(r"'([^']*)':\s*{", r'"\\1": {', response)
+            response = re.sub(r"'([^']*)':\s*\"", r'"\1": "', response)
+            response = re.sub(r"'([^']*)':\s*{", r'"\1": {', response)
 
-            # 3. Handle Chinese quotation marks
+            # 3. Handle Chinese quotation marks - convert to ASCII double quotes
             response = response.replace('"', '"')
             response = response.replace('"', '"')
-            response = response.replace('"', "'")
-            response = response.replace('"', "'")
 
             # 4. Try to parse with increasing tolerance
             analyses = []

@@ -38,6 +38,7 @@ class NewsProcessor:
         filter_pushed: bool = True,
         push_type: str = "digest",
         use_cache: bool = True,
+        platform: str = "",
     ) -> list[NewsItem]:
         """
         获取和处理新闻的统一入口
@@ -48,6 +49,7 @@ class NewsProcessor:
             filter_pushed: 是否过滤已推送的新闻
             push_type: 推送类型（用于日志）
             use_cache: 是否使用LLM缓存
+            platform: 推送平台（用于按平台去重，如 "feishu", "telegram"）
         """
         # Step 1: 获取原始新闻
         news_items = await self._fetch_recent_news(hours=hours)
@@ -69,11 +71,13 @@ class NewsProcessor:
         if filter_pushed and self.session_factory:
             async with self.session_factory() as session:
                 push_repo = NewsPushLogRepository(session)
-                recent_pushed = await push_repo.get_recent_pushed_hashes(hours=24)
+                recent_pushed = await push_repo.get_recent_pushed_hashes(
+                    hours=24, platform=platform
+                )
 
                 filtered = [item for item in aggregated if item.id not in recent_pushed]
                 logger.info(
-                    f"[推送过滤] 已推送过滤: {len(aggregated)} -> {len(filtered)}"
+                    f"[推送过滤] 已推送过滤 (platform={platform}): {len(aggregated)} -> {len(filtered)}"
                 )
                 aggregated = filtered
 
@@ -107,16 +111,16 @@ class NewsProcessor:
         return aggregated[:max_items]
 
     async def mark_as_pushed(
-        self, items: list[NewsItem], push_type: str = "digest"
+        self, items: list[NewsItem], push_type: str = "digest", platform: str = ""
     ) -> None:
-        """标记新闻为已推送"""
+        """标记新闻为已推送（可指定平台）"""
         if not self.session_factory:
             return
 
         async with self.session_factory() as session:
             push_repo = NewsPushLogRepository(session)
             for item in items:
-                await push_repo.mark_pushed(item.id, push_type)
+                await push_repo.mark_pushed(item.id, push_type, platform)
 
             await session.commit()
 

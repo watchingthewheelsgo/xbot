@@ -20,22 +20,38 @@ class NewsPushLogRepository:
     def __init__(self, session: AsyncSession):
         self.session = session
 
-    async def has_been_pushed(self, news_hash: str, hours: int = 24) -> bool:
-        """检查新闻是否在指定小时内已推送"""
+    async def has_been_pushed(
+        self, news_hash: str, hours: int = 24, platform: str = ""
+    ) -> bool:
+        """检查新闻是否在指定小时内已推送（可指定平台）"""
         cutoff = datetime.utcnow() - timedelta(hours=hours)
-        result = await self.session.execute(
-            select(NewsPushLogDB).where(
-                NewsPushLogDB.news_hash == news_hash,
-                NewsPushLogDB.pushed_at >= cutoff,
+        if platform:
+            # Filter by platform
+            result = await self.session.execute(
+                select(NewsPushLogDB).where(
+                    NewsPushLogDB.news_hash == news_hash,
+                    NewsPushLogDB.pushed_at >= cutoff,
+                    NewsPushLogDB.platform == platform,
+                )
             )
-        )
+        else:
+            # No platform filter
+            result = await self.session.execute(
+                select(NewsPushLogDB).where(
+                    NewsPushLogDB.news_hash == news_hash,
+                    NewsPushLogDB.pushed_at >= cutoff,
+                )
+            )
         return result.scalar_one_or_none() is not None
 
-    async def mark_pushed(self, news_hash: str, push_type: str = "digest") -> None:
-        """标记新闻为已推送"""
+    async def mark_pushed(
+        self, news_hash: str, push_type: str = "digest", platform: str = ""
+    ) -> None:
+        """标记新闻为已推送（可指定平台）"""
         log = NewsPushLogDB(
             news_hash=news_hash,
             push_type=push_type,
+            platform=platform,
             pushed_at=datetime.utcnow(),
         )
         self.session.add(log)
@@ -57,20 +73,46 @@ class NewsPushLogRepository:
             logger.debug(f"Cleaned up {deleted} old push log entries")
         return deleted
 
-    async def get_recent_pushed_hashes(self, hours: int = 24) -> set[str]:
-        """获取最近指定小时内已推送的新闻hash集合"""
+    async def get_recent_pushed_hashes(
+        self, hours: int = 24, platform: str = ""
+    ) -> set[str]:
+        """获取最近指定小时内已推送的新闻hash集合（可指定平台）"""
         cutoff = datetime.utcnow() - timedelta(hours=hours)
-        result = await self.session.execute(
-            select(NewsPushLogDB.news_hash).where(NewsPushLogDB.pushed_at >= cutoff)
-        )
+        if platform:
+            # Filter by platform
+            result = await self.session.execute(
+                select(NewsPushLogDB.news_hash).where(
+                    NewsPushLogDB.pushed_at >= cutoff,
+                    NewsPushLogDB.platform == platform,
+                )
+            )
+        else:
+            # No platform filter
+            result = await self.session.execute(
+                select(NewsPushLogDB.news_hash).where(
+                    NewsPushLogDB.pushed_at >= cutoff,
+                )
+            )
         return set(result.scalars().all())
 
-    async def get_push_count(self, hours: int = 24) -> int:
-        """获取最近指定小时内的推送数量"""
+    async def get_push_count(self, hours: int = 24, platform: str = "") -> int:
+        """获取最近指定小时内的推送数量（可指定平台）"""
         cutoff = datetime.utcnow() - timedelta(hours=hours)
-        result = await self.session.execute(
-            select(NewsPushLogDB).where(NewsPushLogDB.pushed_at >= cutoff)
-        )
+        if platform:
+            # Filter by platform
+            result = await self.session.execute(
+                select(NewsPushLogDB).where(
+                    NewsPushLogDB.pushed_at >= cutoff,
+                    NewsPushLogDB.platform == platform,
+                )
+            )
+        else:
+            # No platform filter
+            result = await self.session.execute(
+                select(NewsPushLogDB).where(
+                    NewsPushLogDB.pushed_at >= cutoff,
+                )
+            )
         return len(result.scalars().all())
 
 

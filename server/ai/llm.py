@@ -369,6 +369,7 @@ class LLM:
         stream: bool = True,
         temperature: Optional[float] = None,
         specific_model: Optional[str] = None,
+        max_tokens: Optional[int] = None,
     ) -> str:
         """
         Send a prompt to the LLM and get the response.
@@ -378,6 +379,7 @@ class LLM:
             system_msgs: Optional system messages to prepend
             stream (bool): Whether to stream the response
             temperature (float): Sampling temperature for the response
+            max_tokens (int): Override default max_tokens
 
         Returns:
             str: The generated response
@@ -415,9 +417,13 @@ class LLM:
             }
 
             if self.model in REASONING_MODELS:
-                params["max_completion_tokens"] = self.max_tokens
+                params["max_completion_tokens"] = (
+                    max_tokens if max_tokens is not None else self.max_tokens
+                )
             else:
-                params["max_tokens"] = self.max_tokens
+                params["max_tokens"] = (
+                    max_tokens if max_tokens is not None else self.max_tokens
+                )
                 params["temperature"] = (
                     temperature if temperature is not None else self.temperature
                 )

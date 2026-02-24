@@ -193,35 +193,72 @@ class DataScheduler:
         try:
             # Use unified news processor if available
             if self._news_processor:
-                items = await self._news_processor.get_and_process_news(
-                    hours=0.17,  # ~10 min
-                    max_items=5,
-                    filter_pushed=True,
-                    push_type="digest",
-                    use_cache=True,
-                )
-
-                if not items:
-                    return
-
-                # Format and send
                 from server.bot.formatter import (
                     format_news_digest_with_analysis,
                     format_news_digest_simple,
                 )
 
-                if any(item.chinese_summary for item in items):
-                    message = format_news_digest_with_analysis(items, max_items=5)
-                else:
-                    message = format_news_digest_simple(items, max_items=5)
+                # Push to Telegram
+                if self._telegram_bot:
+                    items = await self._news_processor.get_and_process_news(
+                        hours=0.17,  # ~10 min
+                        max_items=5,
+                        filter_pushed=True,
+                        push_type="digest",
+                        use_cache=True,
+                        platform="telegram",
+                    )
 
-                await self._push_message(message)
+                    if items:
+                        if any(item.chinese_summary for item in items):
+                            message = format_news_digest_with_analysis(
+                                items, max_items=5
+                            )
+                        else:
+                            message = format_news_digest_simple(items, max_items=5)
 
-                # Mark as pushed in database
-                await self._news_processor.mark_as_pushed(items, push_type="digest")
+                        try:
+                            await self._telegram_bot.send_to_admin(message)
+                            await self._news_processor.mark_as_pushed(
+                                items, push_type="digest", platform="telegram"
+                            )
+                            logger.info(
+                                f"[Telegram] News digest pushed: {len(items)} items"
+                            )
+                        except Exception as e:
+                            logger.error(f"Telegram digest push failed: {e}")
+
+                # Push to Feishu
+                if self._feishu_bot:
+                    items = await self._news_processor.get_and_process_news(
+                        hours=0.17,  # ~10 min
+                        max_items=5,
+                        filter_pushed=True,
+                        push_type="digest",
+                        use_cache=True,
+                        platform="feishu",
+                    )
+
+                    if items:
+                        if any(item.chinese_summary for item in items):
+                            message = format_news_digest_with_analysis(
+                                items, max_items=5
+                            )
+                        else:
+                            message = format_news_digest_simple(items, max_items=5)
+
+                        try:
+                            await self._feishu_bot.send_to_admin(message)
+                            await self._news_processor.mark_as_pushed(
+                                items, push_type="digest", platform="feishu"
+                            )
+                            logger.info(
+                                f"[Feishu] News digest pushed: {len(items)} items"
+                            )
+                        except Exception as e:
+                            logger.error(f"Feishu digest push failed: {e}")
 
                 self._last_news_push = datetime.utcnow()
-                logger.info(f"News digest pushed: {len(items)} items")
             else:
                 # Legacy fallback
                 await self._news_digest_push_job_legacy()
@@ -340,6 +377,7 @@ class DataScheduler:
                     filter_pushed=False,  # Briefing shows all important news
                     push_type="morning",
                     use_cache=True,
+                    platform="telegram",  # Separate deduplication per platform
                 )
 
                 if not items:
@@ -375,6 +413,84 @@ class DataScheduler:
 
                 await self._push_message(message)
                 logger.info("Morning briefing pushed")
+
+                # Push to Feishu (separate push for separate deduplication)
+                if self._feishu_bot:
+                    feishu_items = await self._news_processor.get_and_process_news(
+                        hours=12,
+                        max_items=10,
+                        filter_pushed=False,
+                        push_type="morning",
+                        use_cache=True,
+                        platform="feishu",
+                    )
+                    if feishu_items:
+                        feishu_items = [i for i in feishu_items if i.importance >= 3][
+                            :5
+                        ]
+                        if feishu_items:
+                            message = format_morning_briefing(
+                                highlights=feishu_items,
+                                market_summary=market_summary,
+                                date=datetime.utcnow(),
+                            )
+                            try:
+                                await self._feishu_bot.send_to_admin(message)
+                                await self._news_processor.mark_as_pushed(
+                                    feishu_items, push_type="morning", platform="feishu"
+                                )
+                                logger.info(
+                                    f"[Feishu] Morning briefing pushed: {len(feishu_items)} items"
+                                )
+                            except Exception as e:
+                                logger.error(
+                                    f"Feishu morning briefing push failed: {e}"
+                                )
+                # Push to Feishu (separate push for separate deduplication)
+                if self._feishu_bot:
+                    feishu_items = await self._news_processor.get_and_process_news(
+                        hours=12,
+                        max_items=10,
+                        filter_pushed=False,
+                        push_type="morning",
+                        use_cache=True,
+                        platform="feishu",
+                    )
+                    if feishu_items:
+                        feishu_items = [i for i in feishu_items if i.importance >= 3][
+                            :5
+                        ]
+                        if feishu_items:
+                            message = format_morning_briefing(
+                                highlights=feishu_items,
+                                market_summary=market_summary,
+                                date=datetime.utcnow(),
+                            )
+                            try:
+                                await self._feishu_bot.send_to_admin(message)
+                                await self._news_processor.mark_as_pushed(
+                                    feishu_items, push_type="morning", platform="feishu"
+                                )
+                                logger.info(
+                                    f"[Feishu] Morning briefing pushed: {len(feishu_items)} items"
+                                )
+                            except Exception as e:
+                                logger.error(
+                                    f"Feishu morning briefing push failed: {e}"
+                                )
+
+                # Push to Feishu (separate push for separate deduplication)
+                if self._feishu_bot:
+                    try:
+                        await self._feishu_bot.send_to_admin(message)
+                        await self._news_processor.mark_as_pushed(
+                            items, push_type="morning", platform="feishu"
+                        )
+                        logger.info(
+                            f"[Feishu] Morning briefing pushed: {len(items)} items"
+                        )
+                    except Exception as e:
+                        logger.error(f"Feishu morning briefing push failed: {e}")
             else:
                 # Legacy fallback
                 await self._morning_briefing_job_legacy()
@@ -436,31 +552,71 @@ class DataScheduler:
         try:
             # Use unified processor if available
             if self._news_processor:
-                items = await self._news_processor.get_and_process_news(
-                    hours=12,
-                    max_items=10,
-                    filter_pushed=False,  # Briefing shows all important news
-                    push_type="evening",
-                    use_cache=True,
-                )
-
-                if not items:
-                    return
-
-                # Filter by importance (>=3 for briefing)
-                items = [i for i in items if i.importance >= 3][:5]
-
-                if not items:
-                    return
-
                 from server.bot.formatter import format_evening_briefing
 
-                message = format_evening_briefing(
-                    highlights=items, date=datetime.utcnow()
-                )
+                # Push to Telegram
+                if self._telegram_bot:
+                    items = await self._news_processor.get_and_process_news(
+                        hours=12,
+                        max_items=10,
+                        filter_pushed=False,  # Briefing shows all important news
+                        push_type="evening",
+                        use_cache=True,
+                        platform="telegram",
+                    )
 
-                await self._push_message(message)
-                logger.info("Evening briefing pushed")
+                    if items:
+                        # Filter by importance (>=3 for briefing)
+                        items = [i for i in items if i.importance >= 3][:5]
+
+                        if items:
+                            message = format_evening_briefing(
+                                highlights=items, date=datetime.utcnow()
+                            )
+                            try:
+                                await self._telegram_bot.send_to_admin(message)
+                                await self._news_processor.mark_as_pushed(
+                                    items, push_type="evening", platform="telegram"
+                                )
+                                logger.info(
+                                    f"[Telegram] Evening briefing pushed: {len(items)} items"
+                                )
+                            except Exception as e:
+                                logger.error(
+                                    f"Telegram evening briefing push failed: {e}"
+                                )
+
+                # Push to Feishu
+                if self._feishu_bot:
+                    items = await self._news_processor.get_and_process_news(
+                        hours=12,
+                        max_items=10,
+                        filter_pushed=False,  # Briefing shows all important news
+                        push_type="evening",
+                        use_cache=True,
+                        platform="feishu",
+                    )
+
+                    if items:
+                        # Filter by importance (>=3 for briefing)
+                        items = [i for i in items if i.importance >= 3][:5]
+
+                        if items:
+                            message = format_evening_briefing(
+                                highlights=items, date=datetime.utcnow()
+                            )
+                            try:
+                                await self._feishu_bot.send_to_admin(message)
+                                await self._news_processor.mark_as_pushed(
+                                    items, push_type="evening", platform="feishu"
+                                )
+                                logger.info(
+                                    f"[Feishu] Evening briefing pushed: {len(items)} items"
+                                )
+                            except Exception as e:
+                                logger.error(
+                                    f"Feishu evening briefing push failed: {e}"
+                                )
             else:
                 # Legacy fallback
                 await self._evening_briefing_job_legacy()

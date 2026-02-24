@@ -68,6 +68,7 @@ class CommandDispatcher:
                     filter_pushed=False,  # /news command shows all news
                     push_type="command",
                     use_cache=True,
+                    platform="telegram",
                 )
 
                 if not items:

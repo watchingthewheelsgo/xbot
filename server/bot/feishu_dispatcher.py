@@ -53,6 +53,7 @@ class FeishuCommandDispatcher:
                     filter_pushed=False,  # /news shows all news
                     push_type="command",
                     use_cache=True,
+                    platform="feishu",
                 )
 
                 if not items:

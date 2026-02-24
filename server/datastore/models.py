@@ -187,6 +187,9 @@ class NewsPushLogDB(Base):
     push_type: Mapped[str] = mapped_column(
         String(20), default="digest", index=True
     )  # digest, briefing, morning, evening, command
+    platform: Mapped[str] = mapped_column(
+        String(20), default="", index=True
+    )  # feishu, telegram, etc.
     pushed_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.now, index=True
     )
@@ -194,10 +197,11 @@ class NewsPushLogDB(Base):
     __table_args__ = (
         Index("idx_news_push_hash", "news_hash"),
         Index("idx_news_push_type", "push_type"),
+        Index("idx_news_push_platform", "platform"),
     )
 
     def __repr__(self) -> str:
-        return f"<NewsPushLog(hash={self.news_hash[:8]}..., type={self.push_type})>"
+        return f"<NewsPushLog(hash={self.news_hash[:8]}..., type={self.push_type}, platform={self.platform})>"
 
 
 class NewsAnalysisCacheDB(Base):
