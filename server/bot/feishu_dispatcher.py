@@ -47,13 +47,49 @@ class FeishuCommandDispatcher:
         try:
             # Use unified news processor if available
             if self.news_processor:
+                from datetime import datetime, timedelta
+
+                # Calculate fetch start time
+                now = datetime.utcnow()
+                if self.scheduler and hasattr(self.scheduler, "_last_news_fetch_time"):
+                    last_fetch_time = self.scheduler._last_news_fetch_time
+                    if last_fetch_time:
+                        # Fetch from last scheduled/command fetch to now
+                        fetch_start = last_fetch_time
+                        elapsed = (now - fetch_start).total_seconds() / 60
+                        logger.info(
+                            f"[/news Feishu] Fetching from last fetch {elapsed:.1f} min ago"
+                        )
+                    else:
+                        # First /news: fetch from 15 minutes ago
+                        fetch_start = now - timedelta(minutes=15)
+                        logger.info(
+                            "[/news Feishu] First fetch, getting news from 15 min ago"
+                        )
+                else:
+                    # No scheduler: fallback to 15 minutes ago
+                    fetch_start = now - timedelta(minutes=15)
+                    logger.info(
+                        "[/news Feishu] No scheduler, getting news from 15 min ago"
+                    )
+
+                # Update scheduler checkpoint for /continue to work
+                if self.scheduler and hasattr(self.scheduler, "_last_news_fetch_time"):
+                    self.scheduler._last_news_fetch_time = now
+                    self.scheduler._last_news_fetch_offset = 0
+                    self.scheduler._last_news_fetch_source = "command"
+
+                # Calculate hours for fetch
+                hours_elapsed = max(0.25, (now - fetch_start).total_seconds() / 3600)
+
                 items = await self.news_processor.get_and_process_news(
-                    hours=2,
-                    max_items=8,
-                    filter_pushed=False,  # /news shows all news
+                    hours=hours_elapsed,
+                    max_items=10,
+                    filter_pushed=False,
                     push_type="command",
                     use_cache=True,
                     platform="feishu",
+                    fetch_start_time=fetch_start,
                 )
 
                 if not items:
@@ -61,9 +97,9 @@ class FeishuCommandDispatcher:
 
                 # Format and return
                 if any(item.chinese_summary for item in items):
-                    message = format_news_digest_with_analysis(items, max_items=8)
+                    message = format_news_digest_with_analysis(items, max_items=10)
                 else:
-                    message = format_news_digest_simple(items, max_items=8)
+                    message = format_news_digest_simple(items, max_items=10)
 
                 logger.info(f"News sent to Feishu chat {chat_id}")
                 return message
@@ -401,17 +437,69 @@ class FeishuCommandDispatcher:
 输入 /help 查看所有命令"""
 
     async def handle_continue(self, event: dict) -> str:
-        """Handle /continue command - fetch and push more news."""
+        """Handle /continue command - fetch more news from the same time window."""
+        chat_id = event.get("chat_id")
+        logger.info(f"/continue command from Feishu chat {chat_id}")
+
         try:
-            if not self.scheduler or not hasattr(self.scheduler, "continue_news_push"):
-                return "❌ 继续推送功能未配置"
+            if not self.scheduler or not self.news_processor:
+                return "❌ 功能未配置"
 
-            result = await self.scheduler.continue_news_push()
+            # Get scheduler state
+            if not hasattr(self.scheduler, "_last_news_fetch_time"):
+                return "❌ 未找到上次获取记录，请先使用 /news"
 
-            if result.get("success"):
-                return f"✅ {result.get('message', '')}"
+            fetch_start = self.scheduler._last_news_fetch_time
+            if not fetch_start:
+                return "❌ 未找到上次获取记录，请先使用 /news"
+
+            # Increment offset for pagination
+            if hasattr(self.scheduler, "_last_news_fetch_offset"):
+                self.scheduler._last_news_fetch_offset += 10
+                offset = self.scheduler._last_news_fetch_offset
             else:
-                return f"❌ {result.get('message', '操作失败')}"
+                offset = 10
+                self.scheduler._last_news_fetch_offset = offset
+
+            # Calculate time window
+            from datetime import datetime
+
+            now = datetime.utcnow()
+            hours_elapsed = max(0.25, (now - fetch_start).total_seconds() / 3600)
+
+            # Fetch news with offset
+            items = await self.news_processor.get_and_process_news(
+                hours=hours_elapsed,
+                max_items=10,
+                filter_pushed=False,
+                push_type="command",
+                use_cache=True,
+                platform="feishu",
+                fetch_start_time=fetch_start,
+                offset=offset,
+            )
+
+            if not items:
+                # Reset offset
+                self.scheduler._last_news_fetch_offset = 0
+                return "📰 没有更多新闻了"
+
+            # Format and return
+            if any(item.chinese_summary for item in items):
+                message = format_news_digest_with_analysis(items, max_items=10)
+            else:
+                message = format_news_digest_simple(items, max_items=10)
+
+            # Add pagination hint
+            if len(items) >= 10:
+                message += (
+                    f"\n\n📌 *第 {offset // 10 + 1} 页* — 输入 /continue 继续翻页"
+                )
+
+            logger.info(
+                f"[/continue Feishu] Fetched {len(items)} items with offset {offset}"
+            )
+            return message
 
         except Exception as e:
             logger.error(f"/continue command failed: {e}")

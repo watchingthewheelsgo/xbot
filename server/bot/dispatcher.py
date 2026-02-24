@@ -62,13 +62,45 @@ class CommandDispatcher:
         try:
             # Use unified news processor if available
             if self.news_processor:
+                # Calculate fetch start time
+                from datetime import datetime, timedelta
+
+                now = datetime.utcnow()
+                if self.scheduler and hasattr(self.scheduler, "_last_news_fetch_time"):
+                    last_fetch_time = self.scheduler._last_news_fetch_time
+                    if last_fetch_time:
+                        # Fetch from last scheduled/command fetch to now
+                        fetch_start = last_fetch_time
+                        elapsed = (now - fetch_start).total_seconds() / 60
+                        logger.info(
+                            f"[/news] Fetching from last fetch {elapsed:.1f} min ago"
+                        )
+                    else:
+                        # First /news: fetch from 15 minutes ago
+                        fetch_start = now - timedelta(minutes=15)
+                        logger.info("[/news] First fetch, getting news from 15 min ago")
+                else:
+                    # No scheduler: fallback to 15 minutes ago
+                    fetch_start = now - timedelta(minutes=15)
+                    logger.info("[/news] No scheduler, getting news from 15 min ago")
+
+                # Update scheduler checkpoint for /continue to work
+                if self.scheduler and hasattr(self.scheduler, "_last_news_fetch_time"):
+                    self.scheduler._last_news_fetch_time = now
+                    self.scheduler._last_news_fetch_offset = 0
+                    self.scheduler._last_news_fetch_source = "command"
+
+                # Calculate hours for fetch
+                hours_elapsed = max(0.25, (now - fetch_start).total_seconds() / 3600)
+
                 items = await self.news_processor.get_and_process_news(
-                    hours=2,
-                    max_items=8,
-                    filter_pushed=False,  # /news command shows all news
+                    hours=hours_elapsed,
+                    max_items=10,
+                    filter_pushed=False,
                     push_type="command",
                     use_cache=True,
                     platform="telegram",
+                    fetch_start_time=fetch_start,
                 )
 
                 if not items:
@@ -77,9 +109,9 @@ class CommandDispatcher:
 
                 # Format and send
                 if any(item.chinese_summary for item in items):
-                    message = format_news_digest_with_analysis(items, max_items=8)
+                    message = format_news_digest_with_analysis(items, max_items=10)
                 else:
-                    message = format_news_digest_simple(items, max_items=8)
+                    message = format_news_digest_simple(items, max_items=10)
 
                 await update.message.reply_text(
                     message,
@@ -525,25 +557,78 @@ class CommandDispatcher:
     async def handle_continue(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
     ) -> None:
-        """Handle /continue command - fetch and push more news."""
+        """Handle /continue command - fetch more news from the same time window."""
         assert update.effective_chat is not None
         assert update.message is not None
         chat_id = update.effective_chat.id
         logger.info(f"/continue command from chat {chat_id}")
 
         try:
-            if not self.scheduler or not hasattr(self.scheduler, "continue_news_push"):
-                await update.message.reply_text("❌ 继续推送功能未配置")
+            if not self.scheduler or not self.news_processor:
+                await update.message.reply_text("❌ 功能未配置")
                 return
 
-            result = await self.scheduler.continue_news_push()
+            # Get scheduler state
+            if not hasattr(self.scheduler, "_last_news_fetch_time"):
+                await update.message.reply_text("❌ 未找到上次获取记录，请先使用 /news")
+                return
 
-            if result.get("success"):
-                message = f"✅ {result.get('message', '')}"
+            fetch_start = self.scheduler._last_news_fetch_time
+            if not fetch_start:
+                await update.message.reply_text("❌ 未找到上次获取记录，请先使用 /news")
+                return
+
+            # Increment offset for pagination
+            if hasattr(self.scheduler, "_last_news_fetch_offset"):
+                self.scheduler._last_news_fetch_offset += 10
+                offset = self.scheduler._last_news_fetch_offset
             else:
-                message = f"❌ {result.get('message', '操作失败')}"
+                offset = 10
+                self.scheduler._last_news_fetch_offset = offset
 
-            await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN)
+            # Calculate time window end point
+            now = datetime.utcnow()
+            hours_elapsed = max(0.25, (now - fetch_start).total_seconds() / 3600)
+
+            await update.message.reply_text("⏳ 正在获取更多新闻...")
+
+            # Fetch news with offset
+            items = await self.news_processor.get_and_process_news(
+                hours=hours_elapsed,
+                max_items=10,
+                filter_pushed=False,
+                push_type="command",
+                use_cache=True,
+                platform="telegram",
+                fetch_start_time=fetch_start,
+                offset=offset,
+            )
+
+            if not items:
+                await update.message.reply_text("📰 没有更多新闻了")
+                # Reset offset
+                self.scheduler._last_news_fetch_offset = 0
+                return
+
+            # Format and send
+            if any(item.chinese_summary for item in items):
+                message = format_news_digest_with_analysis(items, max_items=10)
+            else:
+                message = format_news_digest_simple(items, max_items=10)
+
+            # Add pagination hint
+            if len(items) >= 10:
+                message += (
+                    f"\n\n📌 *第 {offset // 10 + 1} 页* — 输入 /continue 继续翻页"
+                )
+
+            await update.message.reply_text(
+                message,
+                parse_mode=ParseMode.MARKDOWN,
+                disable_web_page_preview=True,
+            )
+
+            logger.info(f"[/continue] Fetched {len(items)} items with offset {offset}")
 
         except Exception as e:
             logger.error(f"/continue command failed: {e}")

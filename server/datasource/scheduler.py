@@ -62,9 +62,14 @@ class DataScheduler:
         # Push state (legacy, maintained for compatibility)
         self._last_news_push: Optional[datetime] = None
         self._last_crypto_push: Optional[datetime] = None
+
+        # News fetch state for pagination/continue functionality
         self._last_news_fetch_time: Optional[datetime] = (
-            None  # Track last news fetch time for continue command
+            None  # Last fetch checkpoint time (for continue command)
         )
+        self._last_news_fetch_offset: int = 0  # Offset for pagination
+        self._last_news_fetch_source: str = ""  # "scheduled" or "command" or "continue"
+
         self._pushed_news_ids: set[str] = set()
         self._pushed_finnhub_ids: set[str] = set()
         self._alerted_insider_ids: set[str] = set()
@@ -189,7 +194,7 @@ class DataScheduler:
     # ── New Push notification handlers ────────────────────────────────────────
 
     async def _news_digest_push_job(self) -> None:
-        """Push aggregated news with LLM analysis every 5 minutes."""
+        """Push aggregated news with LLM analysis every 15 minutes."""
         if not self._has_push_bot or not self._db_session_factory:
             return
 
@@ -201,32 +206,57 @@ class DataScheduler:
                     format_news_digest_simple,
                 )
 
+                # Calculate fetch start time
+                now = datetime.utcnow()
+                if self._last_news_fetch_time is None:
+                    # First push: fetch news from 15 minutes ago
+                    fetch_start = now - timedelta(minutes=15)
+                    logger.info(
+                        f"[Scheduled Push] First push, fetching from 15 min ago: {fetch_start}"
+                    )
+                else:
+                    # Subsequent pushes: fetch from last checkpoint
+                    fetch_start = self._last_news_fetch_time
+                    elapsed = (now - fetch_start).total_seconds() / 60
+                    logger.info(
+                        f"[Scheduled Push] Fetching from last checkpoint {elapsed:.1f} min ago"
+                    )
+
+                # Update checkpoint to current time for next iteration
+                self._last_news_fetch_time = now
+                self._last_news_fetch_offset = 0  # Reset offset for pagination
+                self._last_news_fetch_source = "scheduled"
+
+                # Calculate hours for _fetch_recent_news (unused but needed for interface)
+                hours_elapsed = max(0.25, (now - fetch_start).total_seconds() / 3600)
+
                 # Push to Telegram
                 if self._telegram_bot:
                     items = await self._news_processor.get_and_process_news(
-                        hours=0.17,  # ~10 min
-                        max_items=20,
-                        filter_pushed=True,
-                        push_type="digest",
+                        hours=hours_elapsed,
+                        max_items=10,
+                        filter_pushed=False,  # Don't filter by push log, we use time-based fetch
+                        push_type="scheduled",
                         use_cache=True,
                         platform="telegram",
+                        fetch_start_time=fetch_start,
                     )
 
                     if items:
                         if any(item.chinese_summary for item in items):
                             message = format_news_digest_with_analysis(
-                                items, max_items=5
+                                items, max_items=10
                             )
                         else:
-                            message = format_news_digest_simple(items, max_items=5)
+                            message = format_news_digest_simple(items, max_items=10)
 
                         try:
                             await self._telegram_bot.send_to_admin(message)
                             await self._news_processor.mark_as_pushed(
-                                items, push_type="digest", platform="telegram"
+                                items, push_type="scheduled", platform="telegram"
                             )
                             logger.info(
-                                f"[Telegram] News digest pushed: {len(items)} items"
+                                f"[Telegram] Scheduled push: {len(items)} items"
                             )
                         except Exception as e:
                             logger.error(f"Telegram digest push failed: {e}")
@@ -234,34 +264,33 @@ class DataScheduler:
                 # Push to Feishu
                 if self._feishu_bot:
                     items = await self._news_processor.get_and_process_news(
-                        hours=0.17,  # ~10 min
-                        max_items=20,
-                        filter_pushed=True,
-                        push_type="digest",
+                        hours=hours_elapsed,
+                        max_items=10,
+                        filter_pushed=False,
+                        push_type="scheduled",
                         use_cache=True,
                         platform="feishu",
+                        fetch_start_time=fetch_start,
                     )
 
                     if items:
                         if any(item.chinese_summary for item in items):
                             message = format_news_digest_with_analysis(
-                                items, max_items=5
+                                items, max_items=10
                             )
                         else:
-                            message = format_news_digest_simple(items, max_items=5)
+                            message = format_news_digest_simple(items, max_items=10)
 
                         try:
                             await self._feishu_bot.send_to_admin(message)
                             await self._news_processor.mark_as_pushed(
-                                items, push_type="digest", platform="feishu"
+                                items, push_type="scheduled", platform="feishu"
                             )
-                            logger.info(
-                                f"[Feishu] News digest pushed: {len(items)} items"
-                            )
+                            logger.info(f"[Feishu] Scheduled push: {len(items)} items")
                         except Exception as e:
                             logger.error(f"Feishu digest push failed: {e}")
 
-                self._last_news_push = datetime.utcnow()
+                self._last_news_push = now
             else:
                 # Legacy fallback
                 await self._news_digest_push_job_legacy()
@@ -1008,16 +1037,16 @@ class DataScheduler:
         # ── Push notification jobs ────────────────────────────────────────────
 
         if self._has_push_bot and settings.push_enabled:
-            # News digest push (every 5 min)
+            # News digest push (every 15 min)
             self.scheduler.add_job(
                 self._news_digest_push_job,
                 trigger="interval",
-                minutes=5,
+                minutes=15,
                 id="news_digest_push",
                 name="News Digest Push",
                 replace_existing=True,
             )
-            logger.info("News digest push job: every 5 min")
+            logger.info("News digest push job: every 15 min")
 
             # Crypto update push (every 5 min)
             if self._crypto_source:
@@ -1201,149 +1230,6 @@ class DataScheduler:
         """Manually trigger Finnhub news fetch."""
         await self._finnhub_news_job()
 
-    async def _fetch_and_push_news(
-        self,
-        platform: str = "",
-        max_items: int = 20,
-        fetch_hours_back: float = 0.17,
-        continue_mode: bool = False,
-    ) -> dict:
-        """
-        Fetch and push news with pagination support.
-
-        Args:
-            platform: "telegram" or "feishu" or "" (both)
-            max_items: Max items to push per batch
-            fetch_hours_back: Hours to look back for news (default ~10 min)
-            continue_mode: If True, continue from last fetch time instead of current time
-
-        Returns:
-            Dict with fetch_time and pushed_count info
-        """
-        if not self._has_push_bot or not self._db_session_factory:
-            return {"success": False, "message": "No push bot configured"}
-
-        if not self._news_processor:
-            return {"success": False, "message": "No news processor configured"}
-
-        try:
-            from server.bot.formatter import (
-                format_news_digest_with_analysis,
-                format_news_digest_simple,
-            )
-
-            # Determine fetch start time
-            if continue_mode and self._last_news_fetch_time:
-                fetch_start = self._last_news_fetch_time
-                logger.info(f"[Continue] Fetching news since {fetch_start}")
-            else:
-                fetch_start = datetime.utcnow() - timedelta(hours=fetch_hours_back)
-                logger.info(f"[New fetch] Fetching news since {fetch_start}")
-
-            # Only update the fetch time tracking in continue mode
-            # to avoid interference with regular scheduled pushes
-            if continue_mode:
-                # Store the current time as the new checkpoint after fetching
-                self._last_news_fetch_time = datetime.utcnow()
-
-            # Track items pushed to each platform
-            telegram_count = 0
-            feishu_count = 0
-
-            # Push to Telegram (or both)
-            if self._telegram_bot and (platform == "telegram" or platform == ""):
-                items = await self._news_processor.get_and_process_news(
-                    hours=fetch_hours_back,
-                    max_items=max_items,
-                    filter_pushed=True,
-                    push_type="digest",
-                    use_cache=True,
-                    platform="telegram",
-                    fetch_start_time=fetch_start,
-                )
-
-                if items:
-                    telegram_count = len(items)
-                    if any(item.chinese_summary for item in items):
-                        message = format_news_digest_with_analysis(
-                            items, max_items=max_items
-                        )
-                    else:
-                        message = format_news_digest_simple(items, max_items=max_items)
-
-                    try:
-                        await self._telegram_bot.send_to_admin(message)
-                        await self._news_processor.mark_as_pushed(
-                            items, push_type="digest", platform="telegram"
-                        )
-                        logger.info(
-                            f"[Telegram] News digest pushed: {len(items)} items"
-                        )
-                    except Exception as e:
-                        logger.error(f"Telegram digest push failed: {e}")
-
-            # Push to Feishu (or both)
-            if self._feishu_bot and (platform == "feishu" or platform == ""):
-                items = await self._news_processor.get_and_process_news(
-                    hours=fetch_hours_back,
-                    max_items=max_items,
-                    filter_pushed=True,
-                    push_type="digest",
-                    use_cache=True,
-                    platform="feishu",
-                    fetch_start_time=fetch_start,
-                )
-
-                if items:
-                    feishu_count = len(items)
-                    if any(item.chinese_summary for item in items):
-                        message = format_news_digest_with_analysis(
-                            items, max_items=max_items
-                        )
-                    else:
-                        message = format_news_digest_simple(items, max_items=max_items)
-
-                    try:
-                        await self._feishu_bot.send_to_admin(message)
-                        await self._news_processor.mark_as_pushed(
-                            items, push_type="digest", platform="feishu"
-                        )
-                        logger.info(f"[Feishu] News digest pushed: {len(items)} items")
-                    except Exception as e:
-                        logger.error(f"Feishu digest push failed: {e}")
-
-            # Calculate total items fetched
-            total_fetched = max(telegram_count, feishu_count)
-            platform_display = platform or "all"
-
-            return {
-                "success": True,
-                "fetched_count": total_fetched,
-                "fetch_time": fetch_start,
-                "message": f"News digest pushed: {total_fetched} items for {platform_display}",
-            }
-
-        except Exception as e:
-            logger.error(f"Fetch and push news failed: {e}")
-            return {"success": False, "message": f"Error: {str(e)[:100]}"}
-
-    async def continue_news_push(self, platform: str = "") -> dict:
-        """
-        Continue fetching and pushing news from last fetch time.
-
-        Args:
-            platform: "telegram" or "feishu" or "" (both)
-        """
-        logger.info(
-            f"[Continue] Starting continue mode for platform: {platform or 'all'}"
-        )
-        return await self._fetch_and_push_news(
-            platform=platform,
-            max_items=20,
-            fetch_hours_back=0.17,
-            continue_mode=True,
-        )
-
     async def get_news_status(self) -> dict:
         """Get news status including last fetch time."""
         return {
@@ -1353,4 +1239,6 @@ class DataScheduler:
             "last_news_push_time": self._last_news_push.isoformat()
             if self._last_news_push
             else None,
+            "fetch_offset": self._last_news_fetch_offset,
+            "fetch_source": self._last_news_fetch_source,
         }

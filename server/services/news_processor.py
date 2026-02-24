@@ -34,12 +34,13 @@ class NewsProcessor:
     async def get_and_process_news(
         self,
         hours: float = 2,
-        max_items: int = 20,
+        max_items: int = 10,
         filter_pushed: bool = True,
         push_type: str = "digest",
         use_cache: bool = True,
         platform: str = "",
         fetch_start_time: datetime | None = None,
+        offset: int = 0,
     ) -> list[NewsItem]:
         """
         获取和处理新闻的统一入口
@@ -52,6 +53,7 @@ class NewsProcessor:
             use_cache: 是否使用LLM缓存
             platform: 推送平台（用于按平台去重，如 "feishu", "telegram"）
             fetch_start_time: 指定获取新闻的起始时间（用于继续推送功能）
+            offset: 分页偏移量（用于 /continue 翻页）
         """
         # Step 1: 获取原始新闻
         news_items = await self._fetch_recent_news(
@@ -89,12 +91,14 @@ class NewsProcessor:
             return []
 
         # Step 4: LLM分析（带缓存）
+        # 需要分析更多条目以支持分页
+        analyze_limit = max_items + offset + 5  # 多取一些用于分页
         if self.news_analyzer:
             aggregated = await self.news_analyzer.analyze_batch(
-                aggregated, max_items=max_items
+                aggregated, max_items=analyze_limit
             )
 
-        # Step 5: 按重要性或源优先级排序并限制数量
+        # Step 5: 按重要性或源优先级排序
         if any(item.importance >= 2 for item in aggregated):
             # 有重要性评分，按重要性排序
             aggregated = sorted(
@@ -112,7 +116,9 @@ class NewsProcessor:
             )
             logger.info("[排序] 按源优先级和时间排序")
 
-        return aggregated[:max_items]
+        # Apply offset and limit for pagination
+        paginated = aggregated[offset : offset + max_items]
+        return paginated
 
     async def mark_as_pushed(
         self, items: list[NewsItem], push_type: str = "digest", platform: str = ""
