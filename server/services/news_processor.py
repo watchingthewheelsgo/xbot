@@ -34,11 +34,12 @@ class NewsProcessor:
     async def get_and_process_news(
         self,
         hours: float = 2,
-        max_items: int = 8,
+        max_items: int = 20,
         filter_pushed: bool = True,
         push_type: str = "digest",
         use_cache: bool = True,
         platform: str = "",
+        fetch_start_time: datetime | None = None,
     ) -> list[NewsItem]:
         """
         获取和处理新闻的统一入口
@@ -50,9 +51,12 @@ class NewsProcessor:
             push_type: 推送类型（用于日志）
             use_cache: 是否使用LLM缓存
             platform: 推送平台（用于按平台去重，如 "feishu", "telegram"）
+            fetch_start_time: 指定获取新闻的起始时间（用于继续推送功能）
         """
         # Step 1: 获取原始新闻
-        news_items = await self._fetch_recent_news(hours=hours)
+        news_items = await self._fetch_recent_news(
+            hours=hours, fetch_start_time=fetch_start_time
+        )
 
         if not news_items:
             return []
@@ -129,12 +133,36 @@ class NewsProcessor:
             if deleted > 0:
                 logger.info(f"[推送日志] 清理旧记录 {deleted} 条")
 
-    async def _fetch_recent_news(self, hours: float) -> list[dict]:
-        """获取最近的新闻（复用scheduler逻辑）"""
+    async def _fetch_recent_news(
+        self, hours: float, fetch_start_time: datetime | None = None
+    ) -> list[dict]:
+        """获取最近的新闻（复用scheduler逻辑）
+
+        Args:
+            hours: 获取最近多少小时的新闻
+            fetch_start_time: 指定获取新闻的起始时间（用于继续推送功能）
+                           如果为 None，则获取 30 分钟前的新闻（第一次获取）
+        """
         import time
 
         start_time = time.time()
-        logger.info(f"[新闻获取] 开始获取最近 {hours} 小时的新闻...")
+
+        # Determine cutoff time
+        if fetch_start_time is None:
+            # First fetch: get news from 30 minutes ago
+            cutoff = datetime.utcnow() - timedelta(minutes=30)
+            logger.info(f"[新闻获取] 初始获取：获取 {cutoff} 之后 30 分钟内的新闻")
+        else:
+            # Continue fetch: get news from fetch_start_time to now
+            cutoff = fetch_start_time
+            hours_elapsed = (
+                datetime.utcnow() - fetch_start_time
+            ).total_seconds() / 3600
+            logger.info(
+                f"[新闻获取] 继续获取：获取 {fetch_start_time} 之后 {hours_elapsed:.1f} 小时 ({hours_elapsed * 60:.0f} 分钟) 的新闻"
+            )
+
+        logger.info("[新闻获取] 开始获取新闻...")
 
         news_items = []
         rss_count = 0
@@ -147,8 +175,7 @@ class NewsProcessor:
                 from server.datastore.models import RSSArticleDB
 
                 rss_start = time.time()
-                cutoff = datetime.utcnow() - timedelta(hours=hours)
-
+                # Use the determined cutoff time
                 async with self.session_factory() as session:
                     query = (
                         select(RSSArticleDB)
@@ -156,7 +183,6 @@ class NewsProcessor:
                         .order_by(RSSArticleDB.fetched_at.desc())
                         .limit(200)
                     )
-
                     result = await session.execute(query)
                     articles = result.scalars().all()
 
@@ -185,7 +211,6 @@ class NewsProcessor:
         # Get Finnhub news from scheduler cache
         if self.scheduler and hasattr(self.scheduler, "_latest_finnhub_news"):
             finnhub_start = time.time()
-            cutoff = datetime.utcnow() - timedelta(hours=hours)
             for fn in self.scheduler._latest_finnhub_news:
                 if fn.published_at >= cutoff:
                     news_items.append(

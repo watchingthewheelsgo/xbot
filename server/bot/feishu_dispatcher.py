@@ -400,6 +400,23 @@ class FeishuCommandDispatcher:
 
 输入 /help 查看所有命令"""
 
+    async def handle_continue(self, event: dict) -> str:
+        """Handle /continue command - fetch and push more news."""
+        try:
+            if not self.scheduler or not hasattr(self.scheduler, "continue_news_push"):
+                return "❌ 继续推送功能未配置"
+
+            result = await self.scheduler.continue_news_push()
+
+            if result.get("success"):
+                return f"✅ {result.get('message', '')}"
+            else:
+                return f"❌ {result.get('message', '操作失败')}"
+
+        except Exception as e:
+            logger.error(f"/continue command failed: {e}")
+            return f"❌ 操作失败: {str(e)[:100]}"
+
 
 def register_feishu_commands(bot, dispatcher: FeishuCommandDispatcher) -> None:
     """Register all command handlers with the Feishu bot."""
@@ -411,5 +428,6 @@ def register_feishu_commands(bot, dispatcher: FeishuCommandDispatcher) -> None:
     bot.add_command("watch", dispatcher.handle_watch)
     bot.add_command("feed", dispatcher.handle_feed)
     bot.add_command("status", dispatcher.handle_status)
+    bot.add_command("continue", dispatcher.handle_continue)
 
-    logger.info("Registered 8 Feishu bot commands")
+    logger.info("Registered 9 Feishu bot commands")

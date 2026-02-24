@@ -522,6 +522,35 @@ class CommandDispatcher:
 输入 /help 查看所有命令"""
         await update.message.reply_text(welcome, parse_mode=ParseMode.MARKDOWN)
 
+    async def handle_continue(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        """Handle /continue command - fetch and push more news."""
+        assert update.effective_chat is not None
+        assert update.message is not None
+        chat_id = update.effective_chat.id
+        logger.info(f"/continue command from chat {chat_id}")
+
+        try:
+            if not self.scheduler or not hasattr(self.scheduler, "continue_news_push"):
+                await update.message.reply_text("❌ 继续推送功能未配置")
+                return
+
+            result = await self.scheduler.continue_news_push()
+
+            if result.get("success"):
+                message = f"✅ {result.get('message', '')}"
+            else:
+                message = f"❌ {result.get('message', '操作失败')}"
+
+            await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN)
+
+        except Exception as e:
+            logger.error(f"/continue command failed: {e}")
+            await update.message.reply_text(
+                f"❌ 操作失败: {str(e)[:100]}", parse_mode=ParseMode.MARKDOWN
+            )
+
 
 def register_commands(bot: "TelegramBot", dispatcher: CommandDispatcher) -> None:
     """Register all command handlers with the bot."""
@@ -534,5 +563,6 @@ def register_commands(bot: "TelegramBot", dispatcher: CommandDispatcher) -> None
     bot.add_command("watch", dispatcher.handle_watch)
     bot.add_command("feed", dispatcher.handle_feed)
     bot.add_command("status", dispatcher.handle_status)
+    bot.add_command("continue", dispatcher.handle_continue)
 
-    logger.info("Registered 8 bot commands")
+    logger.info("Registered 10 bot commands")
