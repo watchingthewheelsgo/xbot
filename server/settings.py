@@ -76,7 +76,7 @@ class Settings(BaseSettings):
     openai_model: str = Field(default="gpt-4o-mini", alias="OPENAI_MODEL")
     streaming_model: str = Field(default="gpt-4o-mini", alias="STREAMING_MODEL")
     planning_model: str = Field(default="gpt-4o-mini", alias="PLANNING_MODEL")
-    max_tokens: int = Field(default=4096, alias="MAX_TOKENS")
+    max_tokens: int = Field(default=32000, alias="MAX_TOKENS")
     temperature: float = Field(default=0.7, alias="TEMPERATURE")
     max_input_tokens: int | None = Field(default=None, alias="MAX_INPUT_TOKENS")
 
