@@ -638,8 +638,8 @@ def format_help() -> str:
 
 
 def format_market_with_watchlist(
-    indices: list[dict],
-    commodities: list[dict],
+    indices: list[dict] | dict[str, dict | list],
+    commodities: list[dict] | dict[str, dict | list],
     watchlist_quotes: list[dict],
     watchlist_news: list[dict] | None = None,
     timestamp: datetime | None = None,
@@ -668,7 +668,9 @@ def format_market_with_watchlist(
     # Indices
     if indices:
         lines.append("*指数*")
-        for data in indices[:4]:
+        # Handle both dict and list input
+        indices_list = list(indices.values()) if isinstance(indices, dict) else indices
+        for data in indices_list[:4]:
             if isinstance(data, dict):
                 name = data.get("name", data.get("symbol", ""))
                 price = data.get("price", data.get("c", 0)) or 0
@@ -682,7 +684,11 @@ def format_market_with_watchlist(
     # Commodities
     if commodities:
         lines.append("*大宗商品*")
-        for data in commodities[:3]:
+        # Handle both dict and list input
+        commodities_list = (
+            list(commodities.values()) if isinstance(commodities, dict) else commodities
+        )
+        for data in commodities_list[:3]:
             if isinstance(data, dict):
                 name = data.get("name", data.get("symbol", ""))
                 price = data.get("price", data.get("c", 0)) or 0
