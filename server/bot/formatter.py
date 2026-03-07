@@ -18,9 +18,9 @@ def format_source_label(source_type: str, source_name: str = "") -> str:
     """Format news source as a label.
 
     Examples:
-        \[RSS - Bloomberg\]
-        \[Finnhub\]
-        \[Reddit - r/stocks\]
+        [RSS - Bloomberg]
+        [Finnhub]
+        [Reddit - r/stocks]
     """
     if not source_type:
         return ""
