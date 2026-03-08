@@ -72,6 +72,14 @@ async def main() -> None:
         report_generator = ReportGenerator()
         logger.info("Report generator initialized")
 
+    # 初始化对话专用 LLM
+    chat_llm = None
+    if settings.is_llm_configured():
+        from server.ai.chat_llm import ChatLLM
+
+        chat_llm = ChatLLM()
+        logger.info("Chat LLM initialized")
+
     # 初始化源管理器
     from server.datasource.source_manager import SourceManager
 
@@ -98,7 +106,7 @@ async def main() -> None:
 
         chat_manager = ChatManager(
             workspace_path=Path.home() / ".xbot",
-            llm_client=None,  # TODO: 添加 LLM 客户端
+            llm_client=chat_llm if chat_llm else None,
             memory_service=None,  # TODO: 添加记忆服务
         )
         logger.info("ChatManager initialized")
@@ -214,7 +222,7 @@ async def main() -> None:
             dispatcher.chat_command_handlers = ChatCommandHandlers(
                 bot=bot_adapter,
                 chat_manager=chat_manager,
-                llm_client=None,
+                llm_client=chat_llm if chat_llm else None,
                 memory_service=None,
             )
             logger.info("Telegram chat handlers initialized")
@@ -230,7 +238,7 @@ async def main() -> None:
             feishu_dispatcher.chat_command_handlers = ChatCommandHandlers(
                 bot=bot_adapter,
                 chat_manager=chat_manager,
-                llm_client=None,
+                llm_client=chat_llm if chat_llm else None,
                 memory_service=None,
             )
             logger.info("Feishu chat handlers initialized")

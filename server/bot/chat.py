@@ -415,85 +415,51 @@ class ChatManager:
                 await on_progress("思考中...")
 
             # 调用 LLM
-            if self.llm_client:
-                response_content = await self._call_llm(messages, chat_id)
-            else:
+            if not self.llm_client:
                 # 没有 LLM 时返回提示消息
-                response_content = {
-                    "content": "AI 服务未配置，无法生成回复。\n\n请先配置 LLM 客户端（如 OpenAI API）来启用对话功能。"
-                }
-
-                # 处理工具调用
-                if response_content.get("tool_calls"):
-                    tool_calls_raw = response_content["tool_calls"]
-                    if isinstance(tool_calls_raw, list):
-                        tool_calls = tool_calls_raw  # type: list[dict[str, Any]]
-                    else:
-                        tool_calls = []  # 没有工具调用
-                    session.state = ChatState.THINKING
-                    if on_tool_call:
-                        await on_tool_call(chat_id, tool_calls)
-
-                    # 执行工具
-                    tool_results = await self._execute_tools(tool_calls, chat_id)
-
-                    # 将工具结果添加到历史
-                    for tool_id, result in tool_results:
-                        session.add_message(
-                            role="tool",
-                            content=f"Tool {tool_id}: {result}",
-                            tool_calls=[{"id": tool_id, "result": result}],
-                        )
-
-                    # 重新调用 LLM 生成最终响应
-                    messages = session.get_messages_for_llm(max_history=30)
-
-                    if on_progress:
-                        await on_progress("生成回复...")
-
-                    response_content = await self._call_llm(messages, chat_id)
-
-                # 添加助手回复
-                assistant_message = response_content.get("content", "")
-                session.add_message(role="assistant", content=assistant_message)
-
-                # 检查是否有工具调用需要执行
-                if response_content.get("tool_calls"):
-                    tool_calls: list[Dict[str, Any]] = response_content["tool_calls"]  # type: ignore[assignment]
-
-                    session.state = ChatState.THINKING
-                    if on_tool_call:
-                        await on_tool_call(chat_id, tool_calls)
-
-                    # 执行工具
-                    tool_results = await self._execute_tools(tool_calls, chat_id)
-
-                    # 将工具结果添加到历史
-                    for tool_id, result in tool_results:
-                        session.add_message(
-                            role="tool",
-                            content=f"Tool {tool_id}: {result}",
-                            tool_calls=[{"id": tool_id, "result": result}],
-                        )
-
-                    # 再次调用 LLM
-                    messages = session.get_messages_for_llm(max_history=40)
-
-                    if on_progress:
-                        await on_progress("生成最终回复...")
-
-                    response_content = await self._call_llm(messages, chat_id)
-                    assistant_message = response_content.get("content", "")
-
-                # 最终添加助手回复
-                session.add_message(role="assistant", content=assistant_message)
-
+                error_msg = "AI 服务未配置，无法生成回复。\n\n请先配置 LLM 客户端（如 OpenAI API）来启用对话功能。"
                 session.state = ChatState.CHATTING
+                return error_msg
 
-                # 持久化会话
-                await self._save_session(chat_id, session)
+            response_content = await self._call_llm(messages, chat_id)
 
-                return assistant_message
+            # 检查是否有工具调用需要执行
+            if response_content.get("tool_calls"):
+                tool_calls: list[Dict[str, Any]] = response_content["tool_calls"]  # type: ignore[assignment]
+
+                session.state = ChatState.THINKING
+                if on_tool_call:
+                    await on_tool_call(chat_id, tool_calls)
+
+                # 执行工具
+                tool_results = await self._execute_tools(tool_calls, chat_id)
+
+                # 将工具结果添加到历史
+                for tool_id, result in tool_results:
+                    session.add_message(
+                        role="tool",
+                        content=f"Tool {tool_id}: {result}",
+                        tool_calls=[{"id": tool_id, "result": result}],
+                    )
+
+                # 再次调用 LLM
+                messages = session.get_messages_for_llm(max_history=40)
+
+                if on_progress:
+                    await on_progress("生成最终回复...")
+
+                response_content = await self._call_llm(messages, chat_id)
+
+            # 添加助手回复
+            assistant_message = response_content.get("content", "")
+            session.add_message(role="assistant", content=assistant_message)
+
+            session.state = ChatState.CHATTING
+
+            # 持久化会话
+            await self._save_session(chat_id, session)
+
+            return assistant_message
 
         except Exception as e:
             logger.error(f"Error processing message for {chat_id}: {e}")
@@ -508,34 +474,53 @@ class ChatManager:
             return {"content": "LLM 客户端未配置"}
 
         try:
-            # 转换消息格式为 LLM 客户端期望的格式
-            # 假设使用 OpenAI 格式
-            llm_messages = []
+            from server.ai.schema import Message
+
+            # 分离 system 消息和普通消息
+            system_messages = []
+            conversation_messages = []
+
             for msg in messages:
-                llm_messages.append(
-                    {
-                        "role": msg["role"],
-                        "content": msg["content"],
-                    }
-                )
+                role = msg.get("role", "user")
+                content = msg.get("content", "")
 
-            # 根据不同的 LLM 客户端调用不同的方法
-            # 这里假设有 chat_completions 方法
-            if hasattr(self.llm_client, "chat_completions"):
-                from server.ai.schema import Message
+                if role == "system":
+                    system_messages.append(Message.system_message(content))
+                else:
+                    # 将普通消息转换为 Message 对象
+                    if role == "user":
+                        conversation_messages.append(Message.user_message(content))
+                    elif role == "assistant":
+                        conversation_messages.append(Message.assistant_message(content))
+                    elif role == "tool":
+                        # 处理工具消息
+                        conversation_messages.append(Message.user_message(content))
+                    else:
+                        conversation_messages.append(
+                            Message(role=role, content=content)
+                        )  # type: ignore
 
-                llm_messages = [
-                    Message(role=m["role"], content=m["content"]) for m in messages
-                ]
-                response = await self.llm_client.chat_completions(
-                    messages=llm_messages, stream=False
-                )
-                return {"content": response}
-            else:
-                return {"content": "LLM 调用方法未实现"}
+            # 获取底层 LLM 实例（如果使用 ChatLLM）
+            llm_instance = (
+                self.llm_client.llm
+                if hasattr(self.llm_client, "llm")
+                else self.llm_client
+            )
+
+            # 使用 LLM.ask() 方法
+            response = await llm_instance.ask(
+                messages=conversation_messages,
+                system_msgs=system_messages if system_messages else None,
+                stream=False,
+            )
+
+            return {"content": response}
 
         except Exception as e:
             logger.error(f"LLM call failed: {e}")
+            import traceback
+
+            logger.error(f"Traceback: {traceback.format_exc()}")
             return {"content": f"调用 AI 时出错：{str(e)[:100]}"}
 
     async def _execute_tools(
