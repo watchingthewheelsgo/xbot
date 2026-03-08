@@ -18,6 +18,9 @@ from telegram.ext import (
 
 if TYPE_CHECKING:
     from server.bot.chat import ChatManager
+else:
+    # Import at runtime for type hints outside TYPE_CHECKING
+    from server.bot.chat import ChatManager
 
 
 # Telegram message limit
