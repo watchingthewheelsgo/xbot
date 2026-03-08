@@ -4,6 +4,7 @@ XBot主入口
 """
 
 import asyncio
+from pathlib import Path
 from loguru import logger
 
 from server.datastore.engine import close_db, init_db, get_session_factory
@@ -95,10 +96,19 @@ async def main() -> None:
     if settings.telegram_bot_token:
         from server.bot.telegram import TelegramBot
         from server.bot.dispatcher import CommandDispatcher, register_commands
+        from server.bot.chat import ChatManager
+
+        # 创建聊天管理器
+        chat_manager = ChatManager(
+            workspace_path=Path.home() / ".xbot",
+            llm_client=None,  # TODO: 添加 LLM 客户端
+            memory_service=None,  # TODO: 添加记忆服务
+        )
 
         telegram_bot = TelegramBot(
             token=settings.telegram_bot_token,
             admin_chat_id=settings.telegram_admin_chat_id,
+            chat_manager=chat_manager,
         )
 
         # 创建命令分发器并注册命令
