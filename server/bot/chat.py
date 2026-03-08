@@ -417,10 +417,19 @@ class ChatManager:
             # 调用 LLM
             if self.llm_client:
                 response_content = await self._call_llm(messages, chat_id)
+            else:
+                # 没有 LLM 时返回提示消息
+                response_content = {
+                    "content": "AI 服务未配置，无法生成回复。\n\n请先配置 LLM 客户端（如 OpenAI API）来启用对话功能。"
+                }
 
                 # 处理工具调用
                 if response_content.get("tool_calls"):
-                    tool_calls = response_content["tool_calls"]
+                    tool_calls_raw = response_content["tool_calls"]
+                    if isinstance(tool_calls_raw, list):
+                        tool_calls = tool_calls_raw  # type: list[dict[str, Any]]
+                    else:
+                        tool_calls = []  # 没有工具调用
                     session.state = ChatState.THINKING
                     if on_tool_call:
                         await on_tool_call(chat_id, tool_calls)
@@ -450,7 +459,7 @@ class ChatManager:
 
                 # 检查是否有工具调用需要执行
                 if response_content.get("tool_calls"):
-                    tool_calls = response_content["tool_calls"]
+                    tool_calls: list[Dict[str, Any]] = response_content["tool_calls"]  # type: ignore[assignment]
 
                     session.state = ChatState.THINKING
                     if on_tool_call:
@@ -491,7 +500,9 @@ class ChatManager:
             session.state = ChatState.CHATTING
             return f"抱歉，处理消息时出错：{str(e)[:100]}"
 
-    async def _call_llm(self, messages: List[Dict], chat_id: str) -> Dict[str, Any]:
+    async def _call_llm(
+        self, messages: List[Dict[str, Any]], chat_id: str
+    ) -> Dict[str, Any]:
         """调用 LLM"""
         if not self.llm_client:
             return {"content": "LLM 客户端未配置"}
@@ -528,7 +539,7 @@ class ChatManager:
             return {"content": f"调用 AI 时出错：{str(e)[:100]}"}
 
     async def _execute_tools(
-        self, tool_calls: List[Dict], chat_id: str
+        self, tool_calls: List[Dict[str, Any]], chat_id: str
     ) -> Dict[str, str]:
         """执行工具调用"""
         results = {}
