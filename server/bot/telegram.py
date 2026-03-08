@@ -134,12 +134,11 @@ class TelegramBot:
         chat_id = str(update.effective_chat.id)
         message_text = update.message.text or ""
 
-        # 不在对话模式，不处理
-        if not self.chat_manager or not self.chat_manager.is_in_chat_mode(chat_id):
-            logger.debug(f"Message ignored (not in chat mode): {chat_id}")
+        # 处理消息（chat_manager 会自动处理进入对话模式）
+        if not self.chat_manager:
+            logger.debug(f"Message ignored (no chat_manager): {chat_id}")
             return
 
-        # 处理消息
         async def on_progress(msg: str):
             """进度回调"""
             if msg:

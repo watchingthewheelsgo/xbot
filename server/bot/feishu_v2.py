@@ -265,8 +265,8 @@ class FeishuBotV2:
 
     def _handle_chat_message(self, chat_id: str, user_message: str) -> None:
         """处理非命令消息（用于对话模式）"""
-        if not self.chat_manager or not self.chat_manager.is_in_chat_mode(chat_id):
-            logger.debug(f"Message ignored (not in chat mode): {chat_id}")
+        if not self.chat_manager:
+            logger.debug(f"Message ignored (no chat_manager): {chat_id}")
             return
 
         # 处理消息

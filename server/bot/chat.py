@@ -383,12 +383,20 @@ class ChatManager:
         on_tool_call: Optional[Callable[[str, List[Dict]], Awaitable[None]]] = None,
     ) -> Optional[str]:
         """处理用户消息并生成回复"""
-        # 不在对话模式中，不处理
+        # 如果不在对话模式中，自动进入对话模式
         if chat_id not in self._chat_mode_chats:
-            logger.debug(f"Message ignored (not in chat mode): {chat_id}")
-            return None
+            logger.debug(f"Auto-entering chat mode for {chat_id}")
+            # 创建新会话
+            session = ChatSession(
+                chat_id=chat_id,
+                platform=platform,
+            )
+            self._chat_mode_chats.add(chat_id)
+            self._sessions[chat_id] = session
+        else:
+            # 获取现有会话
+            session = self._sessions.get(chat_id)
 
-        session = self._sessions.get(chat_id)
         if not session:
             logger.warning(f"No session found for {chat_id}")
             return None
