@@ -523,11 +523,15 @@ def register_feishu_commands(bot, dispatcher: FeishuCommandDispatcher) -> None:
 
     logger.info("Registered 9 Feishu bot commands")
 
-    # Chat mode commands (if handlers are available)
+
+def register_feishu_chat_commands(bot, dispatcher: FeishuCommandDispatcher) -> None:
+    """Register chat mode commands after chat_command_handlers is initialized."""
     if dispatcher.chat_command_handlers:
         bot.add_command("chat", dispatcher.chat_command_handlers.handle_chat)
         bot.add_command("quit", dispatcher.chat_command_handlers.handle_quit)
         bot.add_command(
             "chatstatus", dispatcher.chat_command_handlers.handle_chat_status
         )
-        logger.info("Registered 12 Feishu bot commands")
+        logger.info("Registered 3 Feishu chat mode commands")
+    else:
+        logger.info("Chat mode commands not registered (no chat_command_handlers)")

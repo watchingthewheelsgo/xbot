@@ -709,3 +709,43 @@ def register_commands(bot: "TelegramBot", dispatcher: CommandDispatcher) -> None
         logger.info("Registered 13 bot commands")
     else:
         logger.info("Chat mode commands not registered (no chat_command_handlers)")
+
+
+def register_chat_commands(
+    bot: "TelegramBot | None", dispatcher: CommandDispatcher
+) -> None:
+    """Register chat mode commands after chat_command_handlers is initialized."""
+    if bot is None:
+        logger.warning("Cannot register chat commands: bot is None")
+        return
+
+    if dispatcher.chat_command_handlers:
+        # 创建聊天命令的包装器，将 Telegram Update 转换为通用事件
+        chat_handlers = dispatcher.chat_command_handlers
+
+        async def chat_wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
+            event = TelegramMessageAdapter.to_event(update, context)
+            response = await chat_handlers.handle_chat(event)
+            if response and update.effective_chat:
+                await bot.send_markdown(response, str(update.effective_chat.id))
+
+        async def quit_wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
+            event = TelegramMessageAdapter.to_event(update, context)
+            response = await chat_handlers.handle_quit(event)
+            if response and update.effective_chat:
+                await bot.send_markdown(response, str(update.effective_chat.id))
+
+        async def chatstatus_wrapper(
+            update: Update, context: ContextTypes.DEFAULT_TYPE
+        ):
+            event = TelegramMessageAdapter.to_event(update, context)
+            response = await chat_handlers.handle_chat_status(event)
+            if response and update.effective_chat:
+                await bot.send_markdown(response, str(update.effective_chat.id))
+
+        bot.add_command("chat", chat_wrapper)
+        bot.add_command("quit", quit_wrapper)
+        bot.add_command("chatstatus", chatstatus_wrapper)
+        logger.info("Registered 3 chat mode commands")
+    else:
+        logger.info("Chat mode commands not registered (no chat_command_handlers)")
