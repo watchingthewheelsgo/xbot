@@ -52,12 +52,6 @@ class TelegramBot:
         self.admin_chat_id = admin_chat_id
         self.chat_manager = chat_manager
         self.workspace = workspace
-
-        # 初始化聊天管理器（如果提供了 LLM 和记忆服务）
-        if llm_client and memory_service and chat_manager is not None:
-            chat_manager.llm_client = llm_client
-            chat_manager.memory_service = memory_service
-
         self._bot = Bot(token)
         self._app: Optional[Application] = None
         self._command_handlers: dict[str, Callable] = {}
