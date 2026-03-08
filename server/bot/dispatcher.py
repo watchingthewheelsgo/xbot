@@ -25,6 +25,9 @@ if TYPE_CHECKING:
     from server.analysis.correlation import CorrelationEngine
     from server.reports.generator import ReportGenerator
     from server.services.news_processor import NewsProcessor
+    from server.bot.commands import ChatCommandHandlers
+    from server.ai.llm import LLM
+    from memory.service import MemoryService
 
 
 class CommandDispatcher:
@@ -37,12 +40,29 @@ class CommandDispatcher:
         report_generator: "ReportGenerator | None" = None,
         rss_fetcher=None,
         news_processor: "NewsProcessor | None" = None,
+        bot: "TelegramBot | None" = None,
+        chat_command_handlers: "ChatCommandHandlers | None" = None,
+        llm_client: "LLM | None" = None,
+        memory_service: "MemoryService | None" = None,
     ):
         self.scheduler = scheduler
         self.correlation_engine = correlation_engine
         self.report_generator = report_generator
         self.rss_fetcher = rss_fetcher
         self.news_processor = news_processor
+        self.bot = bot
+        self.chat_command_handlers = chat_command_handlers
+        self.llm_client = llm_client
+        self.memory_service = memory_service
+
+        # 初始化聊天命令处理器
+        if bot and bot.chat_manager:
+            self.chat_command_handlers = ChatCommandHandlers(
+                bot=bot,
+                chat_manager=bot.chat_manager,
+                llm_client=llm_client,
+                memory_service=memory_service,
+            )
 
     async def handle_news(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
@@ -651,3 +671,14 @@ def register_commands(bot: "TelegramBot", dispatcher: CommandDispatcher) -> None
     bot.add_command("continue", dispatcher.handle_continue)
 
     logger.info("Registered 10 bot commands")
+
+    # Chat mode commands (if handlers are available)
+    if dispatcher.chat_command_handlers:
+        bot.add_command("chat", dispatcher.chat_command_handlers.handle_chat)
+        bot.add_command("quit", dispatcher.chat_command_handlers.handle_quit)
+        bot.add_command(
+            "chatstatus", dispatcher.chat_command_handlers.handle_chat_status
+        )
+        logger.info("Registered 13 bot commands")
+    else:
+        logger.info("Chat mode commands not registered (no chat_command_handlers)")

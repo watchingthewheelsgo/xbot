@@ -4,7 +4,6 @@ XBot主入口
 """
 
 import asyncio
-
 from loguru import logger
 
 from server.datastore.engine import close_db, init_db, get_session_factory
@@ -89,6 +88,7 @@ async def main() -> None:
         economic_source=economic_source,
         finnhub_news=finnhub_news,
     )
+    logger.info(f"Scheduler initialized with sources: {scheduler.get_status()}")
 
     # 初始化 Telegram Bot
     telegram_bot = None
@@ -110,7 +110,7 @@ async def main() -> None:
             news_processor=None,  # Will be set after database init
         )
         register_commands(telegram_bot, dispatcher)
-        logger.info("Telegram bot initialized with commands")
+        logger.info("Telegram bot initialized")
 
     # 初始化 Feishu Bot (在同进程的后台线程中运行)
     feishu_bot = None
@@ -137,7 +137,7 @@ async def main() -> None:
             news_processor=None,  # Will be set after database init
         )
         register_feishu_commands(feishu_bot, feishu_dispatcher)
-        logger.info("Feishu bot initialized with commands")
+        logger.info("Feishu bot initialized")
 
     try:
         # 初始化数据库
