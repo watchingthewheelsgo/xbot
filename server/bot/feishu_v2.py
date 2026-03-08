@@ -4,7 +4,7 @@ import asyncio
 import json
 import re
 import threading
-from typing import Optional, Callable, Awaitable
+from typing import Optional, Callable, Awaitable, TYPE_CHECKING
 
 import lark_oapi as lark
 from lark_oapi.api.im.v1 import (
@@ -15,6 +15,9 @@ from lark_oapi.api.im.v1 import (
 from loguru import logger
 
 from server.settings import global_settings
+
+if TYPE_CHECKING:
+    from server.bot.chat import ChatManager
 
 
 def markdown_to_feishu_post(text: str, title: str = "") -> dict:
@@ -85,11 +88,16 @@ class FeishuBotV2:
     """Feishu bot using official SDK with WebSocket long connection (no public URL needed)."""
 
     def __init__(
-        self, app_id: str, app_secret: str, admin_chat_ids: list[str] | None = None
+        self,
+        app_id: str,
+        app_secret: str,
+        admin_chat_ids: list[str] | None = None,
+        chat_manager: "ChatManager | None" = None,
     ):
         self.app_id = app_id
         self.app_secret = app_secret
         self.admin_chat_ids = admin_chat_ids or []
+        self.chat_manager = chat_manager
         self._command_handlers: dict[str, Callable] = {}
         self._ws_client = None
         self._own_loop: asyncio.AbstractEventLoop | None = None
@@ -248,9 +256,63 @@ class FeishuBotV2:
                     self.send_text(
                         chat_id or "", f"未知命令: /{command}\n输入 /help 查看可用命令"
                     )
+            else:
+                # 非命令消息 - 处理对话模式
+                self._handle_chat_message(chat_id or "", text)
 
         except Exception as e:
             logger.error(f"Error handling Feishu message: {e}")
+
+    def _handle_chat_message(self, chat_id: str, user_message: str) -> None:
+        """处理非命令消息（用于对话模式）"""
+        if not self.chat_manager or not self.chat_manager.is_in_chat_mode(chat_id):
+            logger.debug(f"Message ignored (not in chat mode): {chat_id}")
+            return
+
+        # 处理消息
+        async def _process():
+            """在事件循环中处理消息"""
+
+            async def on_progress(msg: str):
+                """进度回调 - 飞书不支持 typing"""
+                pass
+
+            async def on_tool_call(tool_id: str, tool_calls: list) -> None:
+                """工具调用回调"""
+                try:
+                    from server.bot.chat import format_tool_call_message
+
+                    tool_msg = format_tool_call_message(tool_calls)
+                    self.send_post(chat_id, tool_msg)
+                except Exception:
+                    pass
+
+            chat_mgr = self.chat_manager
+            if chat_mgr is None:
+                return
+
+            response = await chat_mgr.process_message(
+                chat_id=chat_id,
+                user_message=user_message,
+                platform="feishu",
+                on_progress=on_progress,
+                on_tool_call=on_tool_call,
+            )
+
+            if response:
+                self.send_post(chat_id, response)
+
+        # 调度到事件循环
+        if self._loop is None or self._loop.is_closed():
+            logger.error("No event loop available for chat processing")
+            return
+
+        future = asyncio.run_coroutine_threadsafe(_process(), self._loop)
+
+        try:
+            future.result(timeout=120)
+        except Exception as e:
+            logger.error(f"Chat processing failed: {e}")
 
     def _run_async_handler(self, handler: Callable, chat_id: str, args: str) -> None:
         """Run an async command handler from the sync SDK callback thread."""

@@ -91,19 +91,23 @@ async def main() -> None:
     )
     logger.info(f"Scheduler initialized with sources: {scheduler.get_status()}")
 
-    # 初始化 Telegram Bot
-    telegram_bot = None
-    if settings.telegram_bot_token:
-        from server.bot.telegram import TelegramBot
-        from server.bot.dispatcher import CommandDispatcher, register_commands
+    # 创建共享的聊天管理器
+    chat_manager = None
+    if settings.telegram_bot_token or settings.is_feishu_configured():
         from server.bot.chat import ChatManager
 
-        # 创建聊天管理器
         chat_manager = ChatManager(
             workspace_path=Path.home() / ".xbot",
             llm_client=None,  # TODO: 添加 LLM 客户端
             memory_service=None,  # TODO: 添加记忆服务
         )
+        logger.info("ChatManager initialized")
+
+    # 初始化 Telegram Bot
+    telegram_bot = None
+    if settings.telegram_bot_token:
+        from server.bot.telegram import TelegramBot
+        from server.bot.dispatcher import CommandDispatcher, register_commands
 
         telegram_bot = TelegramBot(
             token=settings.telegram_bot_token,
@@ -136,6 +140,7 @@ async def main() -> None:
             app_id=settings.feishu_app_id,
             app_secret=settings.feishu_app_secret,
             admin_chat_ids=settings.get_feishu_admin_chat_ids(),
+            chat_manager=chat_manager,
         )
         feishu_bot.set_event_loop(asyncio.get_event_loop())
 
@@ -195,11 +200,36 @@ async def main() -> None:
             news_processor=news_processor, source_manager=source_manager
         )
 
-        # 更新 dispatcher 使用新的 news_processor
+        # 更新 dispatcher 使用新的 news_processor 和 chat_command_handlers
         if telegram_bot and dispatcher:
             dispatcher.news_processor = news_processor
+            if chat_manager and not dispatcher.chat_command_handlers:
+                from server.bot.telegram_adapter import TelegramBotAdapter
+                from server.bot.chat_handlers import ChatCommandHandlers
+
+                bot_adapter = TelegramBotAdapter(telegram_bot)
+                dispatcher.chat_command_handlers = ChatCommandHandlers(
+                    bot=bot_adapter,
+                    chat_manager=chat_manager,
+                    llm_client=None,
+                    memory_service=None,
+                )
+                logger.info("Telegram chat handlers initialized")
+
         if feishu_bot and feishu_dispatcher:
             feishu_dispatcher.news_processor = news_processor
+            if chat_manager and not feishu_dispatcher.chat_command_handlers:
+                from server.bot.feishu_adapter import FeishuBotAdapter
+                from server.bot.chat_handlers import ChatCommandHandlers
+
+                bot_adapter = FeishuBotAdapter(feishu_bot)
+                feishu_dispatcher.chat_command_handlers = ChatCommandHandlers(
+                    bot=bot_adapter,
+                    chat_manager=chat_manager,
+                    llm_client=None,
+                    memory_service=None,
+                )
+                logger.info("Feishu chat handlers initialized")
 
         # 启动 Feishu Bot WebSocket (后台线程)
         if feishu_bot:

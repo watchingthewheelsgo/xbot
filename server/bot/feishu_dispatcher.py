@@ -14,6 +14,7 @@ from server.bot.formatter import (
     format_market_with_watchlist,
 )
 from server.settings import global_settings
+from server.bot.chat_handlers import ChatCommandHandlers
 
 if TYPE_CHECKING:
     from server.datasource.scheduler import DataScheduler
@@ -32,12 +33,14 @@ class FeishuCommandDispatcher:
         report_generator: "ReportGenerator | None" = None,
         rss_fetcher=None,
         news_processor: "NewsProcessor | None" = None,
+        chat_command_handlers: "ChatCommandHandlers | None" = None,
     ):
         self.scheduler = scheduler
         self.correlation_engine = correlation_engine
         self.report_generator = report_generator
         self.rss_fetcher = rss_fetcher
         self.news_processor = news_processor
+        self.chat_command_handlers = chat_command_handlers
 
     async def handle_news(self, event: dict) -> str:
         """Handle /news command - show recent news with analysis."""
@@ -519,3 +522,12 @@ def register_feishu_commands(bot, dispatcher: FeishuCommandDispatcher) -> None:
     bot.add_command("continue", dispatcher.handle_continue)
 
     logger.info("Registered 9 Feishu bot commands")
+
+    # Chat mode commands (if handlers are available)
+    if dispatcher.chat_command_handlers:
+        bot.add_command("chat", dispatcher.chat_command_handlers.handle_chat)
+        bot.add_command("quit", dispatcher.chat_command_handlers.handle_quit)
+        bot.add_command(
+            "chatstatus", dispatcher.chat_command_handlers.handle_chat_status
+        )
+        logger.info("Registered 12 Feishu bot commands")

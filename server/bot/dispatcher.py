@@ -18,6 +18,11 @@ from server.bot.formatter import (
     format_market_with_watchlist,
 )
 from server.settings import global_settings
+from server.bot.chat_handlers import ChatCommandHandlers
+from server.bot.telegram_adapter import (
+    TelegramMessageAdapter,
+    TelegramBotAdapter,
+)
 
 if TYPE_CHECKING:
     from server.bot.telegram import TelegramBot
@@ -25,7 +30,6 @@ if TYPE_CHECKING:
     from server.analysis.correlation import CorrelationEngine
     from server.reports.generator import ReportGenerator
     from server.services.news_processor import NewsProcessor
-    from server.bot.commands import ChatCommandHandlers
     from server.ai.llm import LLM
     from memory.service import MemoryService
 
@@ -51,18 +55,20 @@ class CommandDispatcher:
         self.rss_fetcher = rss_fetcher
         self.news_processor = news_processor
         self.bot = bot
-        self.chat_command_handlers = chat_command_handlers
         self.llm_client = llm_client
         self.memory_service = memory_service
 
-        # 初始化聊天命令处理器
+        # 初始化聊天命令处理器（使用适配器）
         if bot and bot.chat_manager:
+            bot_adapter = TelegramBotAdapter(bot)
             self.chat_command_handlers = ChatCommandHandlers(
-                bot=bot,
+                bot=bot_adapter,
                 chat_manager=bot.chat_manager,
                 llm_client=llm_client,
                 memory_service=memory_service,
             )
+        else:
+            self.chat_command_handlers = chat_command_handlers
 
     async def handle_news(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
@@ -674,11 +680,32 @@ def register_commands(bot: "TelegramBot", dispatcher: CommandDispatcher) -> None
 
     # Chat mode commands (if handlers are available)
     if dispatcher.chat_command_handlers:
-        bot.add_command("chat", dispatcher.chat_command_handlers.handle_chat)
-        bot.add_command("quit", dispatcher.chat_command_handlers.handle_quit)
-        bot.add_command(
-            "chatstatus", dispatcher.chat_command_handlers.handle_chat_status
-        )
+        # 创建聊天命令的包装器，将 Telegram Update 转换为通用事件
+        chat_handlers = dispatcher.chat_command_handlers
+
+        async def chat_wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
+            event = TelegramMessageAdapter.to_event(update, context)
+            response = await chat_handlers.handle_chat(event)
+            if response and update.effective_chat:
+                await bot.send_markdown(response, str(update.effective_chat.id))
+
+        async def quit_wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
+            event = TelegramMessageAdapter.to_event(update, context)
+            response = await chat_handlers.handle_quit(event)
+            if response and update.effective_chat:
+                await bot.send_markdown(response, str(update.effective_chat.id))
+
+        async def chatstatus_wrapper(
+            update: Update, context: ContextTypes.DEFAULT_TYPE
+        ):
+            event = TelegramMessageAdapter.to_event(update, context)
+            response = await chat_handlers.handle_chat_status(event)
+            if response and update.effective_chat:
+                await bot.send_markdown(response, str(update.effective_chat.id))
+
+        bot.add_command("chat", chat_wrapper)
+        bot.add_command("quit", quit_wrapper)
+        bot.add_command("chatstatus", chatstatus_wrapper)
         logger.info("Registered 13 bot commands")
     else:
         logger.info("Chat mode commands not registered (no chat_command_handlers)")
