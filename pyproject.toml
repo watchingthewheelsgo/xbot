@@ -27,6 +27,7 @@ dependencies = [
     "tiktoken>=0.12.0",
     "uvicorn>=0.34.0",
     "pyyaml>=6.0",
+    "python-socks>=2.8.1",
 ]
 
 [tool.pyright]

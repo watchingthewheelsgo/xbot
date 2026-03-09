@@ -123,6 +123,17 @@ class MigrationManager:
                 """,
                 depends_on=["20240310_000001"],
             ),
+            Migration(
+                version="20240410_000001",
+                name="fix_news_push_log_platform",
+                description="Fix news_push_log table - ensure platform column exists",
+                up_sql="""
+                    -- Ensure platform column exists and has proper default
+                    ALTER TABLE news_push_log ADD COLUMN platform TEXT DEFAULT '';
+                """,
+                down_sql="",
+                depends_on=["20240301_000001"],
+            ),
         ]
 
         # 迁移版本表

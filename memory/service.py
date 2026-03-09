@@ -6,7 +6,7 @@
 from typing import List, Optional, Dict, Any
 from loguru import logger
 
-from ..memory.base import (
+from memory.base import (
     MemoryItem,
     MemoryQuery,
     ConversationSummary,
@@ -15,7 +15,7 @@ from ..memory.base import (
     MemoryType,
     generate_memory_id,
 )
-from ..memory.store import MemoryStore, get_memory_store
+from memory.store import MemoryStore, get_memory_store
 
 
 class MemoryService:
