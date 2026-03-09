@@ -14,6 +14,7 @@ from .base import (
     generate_memory_id,
 )
 from .store import MemoryStore, FileMemoryStore, get_memory_store
+from .service import MemoryService
 
 __all__ = [
     # 基础类
@@ -29,4 +30,8 @@ __all__ = [
     "generate_memory_id",
     # 接口
     "get_memory_store",
+    "MemoryService",
 ]
+
+# 兼容性：导出旧的类型名
+Memory = MemoryItem  # type: ignore

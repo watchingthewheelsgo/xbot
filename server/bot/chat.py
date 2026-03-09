@@ -18,6 +18,15 @@ from openai.types.chat import ChatCompletionMessage
 # 工具相关导入
 from server.ai.schema import Message, ToolChoice
 
+# 记忆相关导入
+from server.ai.memory.session_compressor import (
+    SessionCompressor,
+    MemoryExtractionResult,
+    MemoryDeduplicator,
+    ContextBuilder,
+)
+from memory import MemoryScope
+
 
 class ChatState(Enum):
     """对话状态"""
@@ -174,6 +183,7 @@ class ChatManager:
     4. 集成 LLM 调用
     5. 支持工具调用（新闻、加密货币、市场、关注列表等）
     6. 持久化会话到文件
+    7. 记忆提取和去重（参考 OpenViking）
     """
 
     def __init__(
@@ -207,6 +217,11 @@ class ChatManager:
 
         # 工具注册表（延迟初始化）
         self._tool_registry: Optional[Any] = None
+
+        # 记忆系统（参考 OpenViking）
+        self._session_compressor = SessionCompressor(llm_client=llm_client)
+        self._memory_deduplicator = MemoryDeduplicator()
+        self._context_builder: Optional[ContextBuilder] = None
 
         logger.info(f"ChatManager initialized, workspace: {workspace_path}")
 
@@ -324,29 +339,189 @@ class ChatManager:
         logger.info(f"[Chat] To {chat_id}: {content[:100]}")
 
     async def _save_session_to_memory(self, chat_id: str, session: ChatSession) -> None:
-        """将会话保存到记忆"""
+        """
+        将会话保存到记忆（参考 OpenViking）
+
+        处理流程：
+        1. 使用 SessionCompressor 提取记忆
+        2. 使用 MemoryDeduplicator 去重
+        3. 保存去重后的记忆
+        """
         if not self.memory_service:
             return
 
+        # 消息数量不足时不提取
+        if len(session.messages) < 5:
+            logger.debug(
+                f"Not enough messages for memory extraction: {len(session.messages)}"
+            )
+            return
+
         try:
-            # 保存对话摘要
-            summary = session.get_context_summary()
+            # 构建消息列表用于提取
+            messages_list = [
+                {
+                    "role": msg.role,
+                    "content": msg.content,
+                    "timestamp": msg.timestamp.isoformat(),
+                }
+                for msg in session.messages
+            ]
+
+            # 使用会话压缩器提取记忆
+            extraction_result: MemoryExtractionResult = (
+                await self._session_compressor.compress_session(
+                    messages=messages_list, chat_id=chat_id, namespace="chat"
+                )
+            )
+
+            # 保存会话摘要
             await self.memory_service.remember(
                 key=f"chat_summary_{chat_id}",
-                value=summary,
-                scope="global",  # 使用 memory.MemoryScope.GLOBAL 如果可用
+                value=extraction_result.session_summary,
+                scope=MemoryScope.USER,
+                namespace="chat",
+                importance=30,
+                tags=["session_summary", chat_id],
             )
 
             # 保存用户最后活动时间
             await self.memory_service.remember(
                 key=f"last_active_{chat_id}",
                 value=datetime.now().isoformat(),
-                scope="global",
+                scope=MemoryScope.USER,
+                namespace="chat",
+                importance=20,
             )
 
-            logger.debug(f"Session saved to memory for {chat_id}")
+            # 保存提取的记忆
+            saved_count = 0
+            for extracted_mem in extraction_result.memories:
+                # 去重决策
+                # 先获取现有记忆
+                existing_memories = []
+                if self.memory_service:
+                    existing_memories = await self.memory_service.search(
+                        query=extracted_mem.summary[:50],
+                        scope=MemoryScope.USER,
+                        namespace="chat",
+                        limit=5,
+                    )
+
+                # 执行去重
+                action, merge_id = await self._memory_deduplicator.deduplicate(
+                    new_memory=extracted_mem,
+                    existing_memories=existing_memories,
+                    llm_client=self.llm_client,
+                )
+
+                # 根据决策处理
+                if action == "SKIP":
+                    logger.debug(
+                        f"Skipping duplicate memory: {extracted_mem.summary[:30]}"
+                    )
+                    continue
+                elif action == "MERGE":
+                    if merge_id:
+                        # 合并到现有记忆
+                        await self.memory_service.remember(
+                            key=f"{extracted_mem.category}_{merge_id}",
+                            value=f"{extracted_mem.content}\n\n{extracted_mem.overview}",
+                            scope=MemoryScope.USER,
+                            namespace="chat",
+                            importance=extracted_mem.importance,
+                            tags=extracted_mem.tags,
+                        )
+                        saved_count += 1
+                        logger.debug(f"Merged memory into {merge_id}")
+                elif action == "DELETE":
+                    if merge_id:
+                        # 删除旧记忆
+                        await self.memory_service.delete(merge_id)
+                        saved_count += 1
+                        logger.debug(f"Deleted old memory {merge_id}")
+                elif action == "CREATE":
+                    # 创建新记忆
+                    mem_key = f"{extracted_mem.category}_{extracted_mem.summary[:30].replace(' ', '_')}"
+                    await self.memory_service.remember(
+                        key=mem_key,
+                        value=f"{extracted_mem.overview}\n\n{extracted_mem.content}",
+                        scope=MemoryScope.USER,
+                        namespace="chat",
+                        importance=extracted_mem.importance,
+                        tags=extracted_mem.tags,
+                    )
+                    saved_count += 1
+                    logger.debug(f"Created new memory: {mem_key}")
+
+            logger.info(
+                f"Session saved to memory for {chat_id}, saved {saved_count} memories"
+            )
+
         except Exception as e:
             logger.error(f"Failed to save session to memory: {e}")
+
+    async def _build_memory_context(self, chat_id: str) -> str:
+        """
+        构建记忆上下文（参考 OpenViking）
+
+        包括：
+        1. 用户偏好
+        2. 相关历史记忆（带热度排序）
+        3. 用户画像
+        """
+        if not self.memory_service:
+            return ""
+
+        try:
+            # 初始化上下文构建器
+            if self._context_builder is None and self.llm_client:
+                from memory import get_memory_store
+
+                self._context_builder = ContextBuilder(
+                    memory_store=get_memory_store(),
+                    llm_client=self.llm_client,
+                )
+
+            if self._context_builder is None:
+                return ""
+
+            # 构建上下文
+            context = await self._context_builder.build_context(
+                chat_id=chat_id, namespace="chat", max_recent_messages=5, max_memories=3
+            )
+
+            # 格式化为系统提示
+            lines = ["用户上下文信息：", ""]
+
+            # 添加偏好
+            if context["preferences"]:
+                lines.append("用户偏好:")
+                for item in context["preferences"][:3]:
+                    lines.append(f"- {item.value[:80]}")
+                lines.append("")
+
+            # 添加用户画像
+            if context["user_profile"]:
+                lines.append(f"用户画像: {context['user_profile'].value[:150]}")
+                lines.append("")
+
+            # 添加上下文摘要
+            if context["context_summary"]:
+                lines.append(context["context_summary"])
+                lines.append("")
+
+            return "\n".join(lines)
+
+        except Exception as e:
+            logger.error(f"Failed to build memory context: {e}")
+            return ""
+
+    async def delete(self, item_id: str) -> bool:
+        """删除记忆（委托给 memory_service）"""
+        if not self.memory_service:
+            return False
+        return await self.memory_service.delete(item_id)
 
     async def enter_chat_mode(
         self,
@@ -505,7 +680,7 @@ class ChatManager:
     async def _call_llm(
         self, messages: List[Dict[str, Any]], chat_id: str
     ) -> Dict[str, Any]:
-        """调用 LLM，支持工具调用"""
+        """调用 LLM，支持工具调用和记忆上下文"""
         if not self.llm_client:
             return {"content": "LLM 客户端未配置"}
 
@@ -514,9 +689,16 @@ class ChatManager:
             tool_registry = self._get_tool_registry()
             tools = tool_registry.definitions if tool_registry else None
 
+            # 构建记忆上下文
+            memory_context = await self._build_memory_context(chat_id)
+
             # 分离 system 消息和普通消息
             system_messages = []
             conversation_messages = []
+
+            # 添加记忆上下文到系统消息
+            if memory_context:
+                system_messages.append(Message.system_message(memory_context))
 
             # 添加工具说明到系统消息
             system_messages.append(

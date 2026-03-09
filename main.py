@@ -103,13 +103,17 @@ async def main() -> None:
     chat_manager = None
     if settings.telegram_bot_token or settings.is_feishu_configured():
         from server.bot.chat import ChatManager
+        from memory import MemoryService
+
+        # 初始化记忆服务
+        memory_service = MemoryService()
 
         chat_manager = ChatManager(
             workspace_path=Path.home() / ".xbot",
             llm_client=chat_llm if chat_llm else None,
-            memory_service=None,  # TODO: 添加记忆服务
+            memory_service=memory_service,  # 使用记忆服务
         )
-        logger.info("ChatManager initialized")
+        logger.info("ChatManager initialized with memory service")
 
     # 初始化 Telegram Bot
     telegram_bot = None
