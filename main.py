@@ -212,6 +212,12 @@ async def main() -> None:
             news_processor=news_processor, source_manager=source_manager
         )
 
+        # 更新 chat_manager 的 scheduler 和 news_processor
+        if chat_manager:
+            chat_manager.scheduler = scheduler
+            chat_manager.news_processor = news_processor
+            logger.info("ChatManager scheduler and news_processor updated")
+
         # 更新 dispatcher 使用新的 news_processor 和 chat_command_handlers
         # 先初始化 chat_command_handlers，然后再注册命令
         if chat_manager and telegram_bot and dispatcher:

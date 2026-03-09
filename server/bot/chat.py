@@ -12,6 +12,11 @@ from typing import Optional, List, Dict, Any, Callable, Awaitable, cast
 import json
 
 from loguru import logger
+from openai.types.chat import ChatCompletionMessage
+
+
+# 工具相关导入
+from server.ai.schema import Message, ToolChoice
 
 
 class ChatState(Enum):
@@ -167,7 +172,7 @@ class ChatManager:
     2. 支持超时机制（5分钟无新消息后30秒退出）
     3. 集成 memory 记忆系统
     4. 集成 LLM 调用
-    5. 支持工具调用
+    5. 支持工具调用（新闻、加密货币、市场、关注列表等）
     6. 持久化会话到文件
     """
 
@@ -177,11 +182,15 @@ class ChatManager:
         llm_client: Optional[Any] = None,
         memory_service: Optional[Any] = None,
         enable_persistence: bool = True,
+        scheduler: Optional[Any] = None,
+        news_processor: Optional[Any] = None,
     ):
         self.workspace = workspace_path
         self.llm_client = llm_client
         self.memory_service = memory_service
         self.enable_persistence = enable_persistence
+        self.scheduler = scheduler
+        self.news_processor = news_processor
 
         # 会话存储
         self._sessions: Dict[str, ChatSession] = {}
@@ -196,7 +205,24 @@ class ChatManager:
         self._chat_mode_chats: set[str] = set()  # 当前处于对话模式的 chat_id
         self._lock = asyncio.Lock()
 
+        # 工具注册表（延迟初始化）
+        self._tool_registry: Optional[Any] = None
+
         logger.info(f"ChatManager initialized, workspace: {workspace_path}")
+
+    def _get_tool_registry(self) -> Any:
+        """获取或初始化工具注册表"""
+        if self._tool_registry is None:
+            from server.ai.tools.chat_tools import ChatToolRegistry
+
+            self._tool_registry = ChatToolRegistry(
+                scheduler=self.scheduler,
+                news_processor=self.news_processor,
+            )
+            logger.info(
+                f"Tool registry initialized with {len(self._tool_registry.tool_names)} tools"
+            )
+        return self._tool_registry
 
     async def start_timeout_checker(self) -> None:
         """启动超时检查任务"""
@@ -435,11 +461,21 @@ class ChatManager:
                 tool_results = await self._execute_tools(tool_calls, chat_id)
 
                 # 将工具结果添加到历史
-                for tool_id, result in tool_results:
+                for tool_call in tool_calls:
+                    call_id = tool_call.get("id", "")
+                    result = tool_results.get(call_id, "工具执行失败")
+
+                    # 将工具结果格式化为消息
+                    function = tool_call.get("function", {})
+                    tool_name = function.get("name", "")
+
+                    # 使用 OpenAI 格式的 tool 消息
                     session.add_message(
                         role="tool",
-                        content=f"Tool {tool_id}: {result}",
-                        tool_calls=[{"id": tool_id, "result": result}],
+                        content=result,
+                        tool_calls=[
+                            {"id": call_id, "tool_name": tool_name, "result": result}
+                        ],
                     )
 
                 # 再次调用 LLM
@@ -469,16 +505,26 @@ class ChatManager:
     async def _call_llm(
         self, messages: List[Dict[str, Any]], chat_id: str
     ) -> Dict[str, Any]:
-        """调用 LLM"""
+        """调用 LLM，支持工具调用"""
         if not self.llm_client:
             return {"content": "LLM 客户端未配置"}
 
         try:
-            from server.ai.schema import Message
+            # 获取工具注册表
+            tool_registry = self._get_tool_registry()
+            tools = tool_registry.definitions if tool_registry else None
 
             # 分离 system 消息和普通消息
             system_messages = []
             conversation_messages = []
+
+            # 添加工具说明到系统消息
+            system_messages.append(
+                Message.system_message(
+                    "你可以使用工具来获取最新数据，包括新闻、加密货币价格、市场数据等。"
+                    "当用户需要这类信息时，请主动调用相应的工具。"
+                )
+            )
 
             for msg in messages:
                 role = msg.get("role", "user")
@@ -486,35 +532,58 @@ class ChatManager:
 
                 if role == "system":
                     system_messages.append(Message.system_message(content))
+                elif role == "user":
+                    conversation_messages.append(Message.user_message(content))
+                elif role == "assistant":
+                    conversation_messages.append(Message.assistant_message(content))
+                elif role == "tool":
+                    # 处理工具消息
+                    conversation_messages.append(Message.user_message(content))
                 else:
-                    # 将普通消息转换为 Message 对象
-                    if role == "user":
-                        conversation_messages.append(Message.user_message(content))
-                    elif role == "assistant":
-                        conversation_messages.append(Message.assistant_message(content))
-                    elif role == "tool":
-                        # 处理工具消息
-                        conversation_messages.append(Message.user_message(content))
-                    else:
-                        conversation_messages.append(
-                            Message(role=role, content=content)
-                        )  # type: ignore
+                    conversation_messages.append(Message(role=role, content=content))  # type: ignore
 
-            # 获取底层 LLM 实例（如果使用 ChatLLM）
+            # 获取底层 LLM 实例
             llm_instance = (
                 self.llm_client.llm
                 if hasattr(self.llm_client, "llm")
                 else self.llm_client
             )
 
-            # 使用 LLM.ask() 方法
-            response = await llm_instance.ask(
+            # 使用 LLM.ask_tool() 方法支持工具调用
+            response_message: Optional[
+                ChatCompletionMessage
+            ] = await llm_instance.ask_tool(
                 messages=conversation_messages,
                 system_msgs=system_messages if system_messages else None,
-                stream=False,
+                tools=tools,
+                tool_choice=ToolChoice.AUTO,
             )
 
-            return {"content": response}
+            if response_message is None:
+                return {"content": "AI 返回了空响应"}
+
+            # 检查是否有工具调用
+            tool_calls = getattr(response_message, "tool_calls", None)
+            content = response_message.content or ""
+
+            # 提取工具调用信息
+            formatted_tool_calls = []
+            if tool_calls:
+                for tc in tool_calls:
+                    formatted_tool_calls.append(
+                        {
+                            "id": tc.id,
+                            "function": {
+                                "name": tc.function.name,
+                                "arguments": tc.function.arguments,
+                            },
+                        }
+                    )
+
+            return {
+                "content": content,
+                "tool_calls": formatted_tool_calls if formatted_tool_calls else None,
+            }
 
         except Exception as e:
             logger.error(f"LLM call failed: {e}")
@@ -527,29 +596,42 @@ class ChatManager:
         self, tool_calls: List[Dict[str, Any]], chat_id: str
     ) -> Dict[str, str]:
         """执行工具调用"""
+        tool_registry = self._get_tool_registry()
         results = {}
 
         for tool_call in tool_calls:
-            tool_id = tool_call.get("id", "unknown")
-            arguments = tool_call.get("arguments", {})
+            call_id = tool_call.get("id", "")
+            function = tool_call.get("function", {})
+            tool_name = function.get("name", "")
+            arguments_str = function.get("arguments", "{}")
 
             try:
-                # 这里需要根据实际的工具系统实现
-                # 暂时返回模拟结果
-                if tool_id == "web_search":
-                    results[tool_id] = f"已搜索：{arguments.get('query', '')}"
-                elif tool_id == "get_news":
-                    results[tool_id] = "已获取最新新闻"
-                elif tool_id == "get_crypto":
-                    results[tool_id] = "已获取加密货币数据"
+                # 解析参数
+                import json
+
+                if isinstance(arguments_str, str):
+                    arguments = json.loads(arguments_str)
                 else:
-                    results[tool_id] = "工具调用完成"
+                    arguments = arguments_str
 
-                logger.info(f"Tool executed: {tool_id}")
+                # 执行工具
+                tool_result = await tool_registry.execute_tool(tool_name, arguments)
 
+                if tool_result.success:
+                    results[call_id] = tool_result.content
+                    logger.info(
+                        f"Tool {tool_name} executed successfully for chat {chat_id}"
+                    )
+                else:
+                    results[call_id] = f"工具执行失败: {tool_result.content}"
+                    logger.warning(f"Tool {tool_name} failed: {tool_result.content}")
+
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to parse tool arguments: {e}")
+                results[call_id] = f"参数解析失败: {str(e)[:50]}"
             except Exception as e:
-                logger.error(f"Tool {tool_id} failed: {e}")
-                results[tool_id] = f"工具调用失败：{str(e)[:50]}"
+                logger.error(f"Tool execution failed for {tool_name}: {e}")
+                results[call_id] = f"工具执行失败: {str(e)[:50]}"
 
         return results
 
